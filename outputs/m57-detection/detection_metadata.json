@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "software": {
+    "name": "astroidentify",
+    "version": "0.1.0"
+  },
+  "source": "M57__Ring_Nebula-eQuinox-20260925-003755.png",
+  "source_path": "/home/adrit/AstroIdentify/data/raw/M57__Ring_Nebula-eQuinox-20260925-003755.png",
+  "source_sha256": "c4d1bc0dd80e3bdeda8d33bdfc06d47727522da1acd87626a2c7184ebce7b4bc",
+  "format": "PNG",
+  "width": 2560,
+  "height": 1920,
+  "channels": 3,
+  "coordinate_convention": {
+    "origin": "image array; x = column index, y = row index (0-based)",
+    "x": "increases left to right",
+    "y": "increases top to bottom",
+    "pixel_centers": "integer coordinates are pixel centres; pixel (0, 0) spans -0.5..0.5",
+    "row_zero_displayed_at": "top"
+  },
+  "detection_plane": {
+    "method": "channel_mean",
+    "definition": "mean of colour channels",
+    "units": "source pixel values",
+    "n_invalid_pixels": 0,
+    "invalid_pixel_fill": 9.333333015441895
+  },
+  "background_model": {
+    "method": "photutils Background2D: sigma-clipped median per tile, std RMS, median-filtered tile grid",
+    "box_size": [
+      64,
+      64
+    ],
+    "filter_size": 3,
+    "rms_floor": 0.16666666666666666,
+    "background_map": {
+      "min": 5.5,
+      "median": 9.531621932983398,
+      "max": 35.84376525878906
+    },
+    "background_rms_map": {
+      "min": 3.0454742908477783,
+      "median": 3.783660411834717,
+      "max": 14.500696182250977
+    }
+  },
+  "fwhm": {
+    "value": 9.29422430663224,
+    "method": "estimated",
+    "n_stars": 50,
+    "iterations": 3,
+    "spread_16_84": [
+      8.354673980306654,
+      10.646061561512157
+    ]
+  },
+  "detector": {
+    "algorithm": "photutils DAOStarFinder (DAOFIND)",
+    "threshold": "5.0 x local RMS map",
+    "aperture_radius": 9.29422430663224
+  },
+  "saturation": {
+    "level": 255.0,
+    "source": "raster_nominal_max"
+  },
+  "overlay": {
+    "layout": "image pixels at rows 0..height-1 exactly as in the array (no resize, crop or flip); legend strip appended below",
+    "markers": {
+      "accepted": "green circle, radius = aperture radius (cyan if edge-flagged)",
+      "rejected": "small red circle",
+      "saturated": "extra yellow ring"
+    }
+  },
+  "summary": {
+    "n_candidates": 2464,
+    "n_accepted": 643,
+    "n_rejected": 1821,
+    "n_saturated": 129,
+    "n_saturated_accepted": 116,
+    "n_edge_flagged": 117,
+    "n_edge_flagged_accepted": 9,
+    "rejection_reason_counts": {
+      "duplicate_of_saturated_source": 6,
+      "elongated_saturated_region": 2,
+      "extended": 1,
+      "low_snr": 1787,
+      "not_star_like": 189,
+      "too_close_to_edge": 79,
+      "too_elongated": 63
+    },
+    "median_snr_accepted": 15.63459687605642,
+    "median_fwhm_accepted": 7.49893565240171,
+    "background_map": {
+      "min": 5.5,
+      "median": 9.531621932983398,
+      "max": 35.84376525878906
+    },
+    "background_rms_map": {
+      "min": 3.0454742908477783,
+      "median": 3.783660411834717,
+      "max": 14.500696182250977
+    },
+    "fwhm_used": 9.29422430663224,
+    "reference_effective_fwhm": 7.481398939420105,
+    "noise_correlation_factor": 7.462178950034104,
+    "n_empty_apertures": 5875
+  },
+  "rejection_reasons": {
+    "low_snr": "aperture SNR below min_snr",
+    "too_close_to_edge": "centroid closer than edge_reject_fwhm * FWHM to the image border",
+    "not_star_like": "DAOFIND sharpness outside sharpness_range (unsaturated sources only)",
+    "too_elongated": "|roundness1| or |roundness2| above max_abs_roundness (unsaturated only)",
+    "elongated_saturated_region": "saturated region wider than saturated_shape_min_diameter_fwhm * FWHM with axis ratio below min_saturated_axis_ratio (saturated sources only)",
+    "extended": "effective FWHM above max_fwhm_ratio * median effective FWHM of stars (unsaturated sources only)",
+    "duplicate_of_saturated_source": "another detection on the same saturated core (see duplicate_of)"
+  },
+  "warnings": [],
+  "config": {
+    "background_box_size": 64,
+    "background_filter_size": 3,
+    "background_clip_sigma": 3.0,
+    "background_exclude_percentile": 10.0,
+    "detection_sigma": 5.0,
+    "fwhm": null,
+    "fwhm_initial_guess": 4.0,
+    "fwhm_min": 1.0,
+    "fwhm_max": 30.0,
+    "fwhm_estimation_sigma": 20.0,
+    "fwhm_estimation_max_stars": 50,
+    "fwhm_estimation_min_stars": 5,
+    "min_separation_fwhm": 2.5,
+    "aperture_radius_fwhm": 1.0,
+    "saturation_level": null,
+    "edge_flag_fwhm": 2.0,
+    "edge_reject_fwhm": 1.0,
+    "min_snr": 5.0,
+    "sharpness_range": [
+      0.2,
+      1.0
+    ],
+    "max_abs_roundness": 1.0,
+    "min_saturated_axis_ratio": 0.5,
+    "saturated_shape_min_diameter_fwhm": 1.0,
+    "max_fwhm_ratio": 2.0,
+    "correct_correlated_noise": true,
+    "empty_aperture_min_count": 30,
+    "overlay_max_labels": 100
+  },
+  "artifacts": {
+    "sources_csv": "sources.csv",
+    "sources_json": "sources.json",
+    "metadata": "detection_metadata.json",
+    "preprocessing_metadata": "preprocessing_metadata.json",
+    "overlay": "detected_sources.png",
+    "background_map": "background_map.npy",
+    "background_rms": "background_rms.npy",
+    "background_map_png": "background_map.png",
+    "background_rms_png": "background_rms.png"
+  }
+}

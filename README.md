@@ -4,9 +4,12 @@ AstroIdentify aims to take an astronomical image with little or no context, work
 the sky it points, identify catalogued objects in the field, annotate the image and explain how
 confident it is in each identification.
 
-The project is built in milestones. **Only Milestone 1 (image ingestion and preprocessing) is
-implemented.** Source/star detection, plate solving (astrometry/WCS), catalogue queries,
-ML verification, an API and a web frontend are deliberately left to future milestones.
+The project is built in milestones. **Milestones 1 (image ingestion and preprocessing) and 2
+(stellar source detection) are implemented.** AstroIdentify does **not** yet identify celestial
+objects: it finds and measures point-source candidates, but it does not know where the image
+points or what any source is. Plate solving (astrometry/WCS), catalogue queries, object
+identification, ML verification, an API and a web frontend are deliberately left to future
+milestones.
 
 ## Milestone 1: what it does
 
@@ -27,10 +30,10 @@ Requires Python 3.11+.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"      # runtime deps: numpy, astropy, pillow; dev: pytest, ruff
+pip install -e ".[dev]"   # runtime: numpy, astropy, pillow, photutils, scipy; dev: pytest, ruff
 ```
 
-## Usage
+## Usage (Milestone 1: preprocessing)
 
 ```bash
 astroidentify preprocess data/raw/m57.jpg --output outputs/m57
@@ -132,8 +135,10 @@ File content decides the format: a PNG saved as `.jpg` loads as PNG, with a warn
   instead, with a warning.
 - **Pixel-to-pixel noise.** Also reported: the MAD of differences between neighbouring
   pixels, divided by √2. Smooth structure cancels in these differences. If the global noise is
-  more than 2× larger, the image has large-scale structure (nebulosity, gradients) and a
-  warning is emitted.
+  more than 2× larger, a warning is emitted. The cause may be large-scale structure
+  (nebulosity, gradients) *or* spatially correlated noise (upsampled, demosaiced, denoised or
+  JPEG images), which this statistic underestimates. Milestone 2's local RMS map and
+  empty-aperture noise factor tell the two apart.
 - **Normalization.** `(x - p1) / (p99.5 - p1)` over all finite values, with one scale shared
   by all colour channels (colour ratios are kept). Values are **not clipped**, so faint signal
   below 0 and bright cores above 1 survive, and the map can be inverted exactly.
@@ -143,8 +148,8 @@ File content decides the format: a PNG saved as `.jpg` loads as PNG, with a warn
 ## Known limitations (Milestone 1)
 
 - Background and noise are single **global** values. Images dominated by nebulosity or
-  gradients get an inflated `noise_sigma` (see the pixel-to-pixel noise and warning). A tiled
-  background map belongs to a later milestone.
+  gradients get an inflated `noise_sigma` (see the pixel-to-pixel noise and warning).
+  Milestone 2 adds local background and RMS maps for detection.
 - JPEG/PNG values are kept as stored (usually gamma-encoded, not linear light), and JPEG
   compression makes noise spatially correlated.
 - Pillow reduces 16-bit **colour** PNGs to 8 bits per channel (detected and warned).
@@ -152,6 +157,154 @@ File content decides the format: a PNG saved as `.jpg` loads as PNG, with a warn
 - FITS cubes, multi-plane colour FITS and raw camera formats (CR2, NEF, ...) are not supported.
 - A 24-megapixel RGB image takes about 13 s and about 1.7 GB RAM. Use `--preview-max-size`
   for smaller previews.
+
+## Milestone 2: stellar source detection
+
+Detection consumes the Milestone 1 `PreprocessingResult` (the image is never reloaded) and
+produces a machine-readable list of stellar source candidates with accurate pixel centroids,
+brightness, quality measurements, flags and explicit accept/reject decisions, plus a
+diagnostic overlay. **This is source detection, not object identification.** Nothing is
+named or matched to a catalogue, and extended objects such as nebulae are not recognised.
+
+```bash
+astroidentify detect data/raw/M57__Ring_Nebula-eQuinox-20260925-003755.png \
+    --output outputs/m57-detection
+```
+
+Without `--output`, results go to `outputs/<image name>-detection/`. The summary looks like:
+
+```text
+Dimensions: 2560 x 1920 (channel_mean detection plane)
+FWHM: 9.29 px (estimated)
+Local background: median 9.532 (min 5.5, max 35.84)
+Local RMS: median 3.784 (min 3.045, max 14.5)
+Correlated-noise factor: 7.46
+Candidates: 2464
+Accepted: 643
+Rejected: 1821 (duplicate_of_saturated_source 6, elongated_saturated_region 2, extended 1, low_snr 1787, not_star_like 189, too_close_to_edge 79, too_elongated 63)
+Saturated: 129 (116 accepted)
+Edge flagged: 117 (9 accepted)
+...
+```
+
+### Pipeline
+
+1. **Detection plane.** Grayscale images are used as-is; colour images use the unweighted
+   mean of R, G, B, in source units (not the normalized array). Invalid pixels are filled with
+   the Milestone 1 background and masked. The original arrays are not modified.
+2. **Local background.** photutils `Background2D`: tiles of about `--box-size` px (default
+   64, adjusted so tiles cover the image evenly), 3σ-clipped median background and
+   standard-deviation RMS per tile, a 3×3 median filter over the tile grid, and
+   interpolation to full resolution. This produces `background_map` and `background_rms`,
+   and detection runs on `plane - background_map`. The RMS map is floored at the
+   quantization noise of integer data.
+3. **FWHM.** Unless `--fwhm` is given, circular Gaussians are fitted to up to 50 bright,
+   unsaturated stars away from the edges, iterating until the median converges.
+4. **Detection.** photutils `DAOStarFinder` (DAOFIND) with the threshold
+   `--detection-sigma` × local RMS map (default 5). Its built-in shape cuts are disabled, so
+   every thresholded peak becomes a candidate. DAOFIND silently drops objects it cannot fit
+   (bright stars much broader than the kernel), so a supplementary peak search adds them back
+   with a centre-of-mass centroid (`centroid_method = peak_com`).
+5. **Saturated stars.** A pixel is saturated if any channel reaches the saturation level:
+   the raster nominal maximum (e.g. 255 for 8-bit), FITS `SATURATE`, or
+   `--saturation-level`. Detections on the same connected saturated core are merged: the
+   brightest is repositioned to the core centroid (`centroid_method = saturated_core`) and
+   the rest are rejected as duplicates. Saturated stars are flagged, never rejected for
+   saturation alone.
+6. **Measurements.** Aperture photometry (radius 1 FWHM) on the background-subtracted plane
+   gives `flux`, `flux_err` and `snr`. `flux_err` is scaled by an empirical
+   **correlated-noise factor**: the scatter of identical apertures placed on source-free sky,
+   divided by the per-pixel prediction (1 for white noise). The effective FWHM is derived from
+   flux/peak. DAOFIND sharpness and roundness, local background and RMS, edge distance and the
+   saturated-pixel count are also recorded.
+7. **Filtering** (separate and explainable; every candidate is kept with its reasons):
+
+   | Reason | Rule (defaults) |
+   | --- | --- |
+   | `low_snr` | SNR < `--min-snr` (5) |
+   | `too_close_to_edge` | centroid < 1 FWHM from the border (stars 1–2 FWHM away are only *flagged* `edge`) |
+   | `not_star_like` | DAOFIND sharpness outside 0.2–1.0 (unsaturated only) |
+   | `too_elongated` | \|roundness1\| or \|roundness2\| > 1.0 (unsaturated only) |
+   | `extended` | effective FWHM > 2 × median effective FWHM of the stars (unsaturated only) |
+   | `elongated_saturated_region` | saturated region ≥ 1 FWHM across with axis ratio < 0.5 |
+   | `duplicate_of_saturated_source` | a second detection on an already-used saturated core |
+
+### Detection outputs
+
+```text
+outputs/<name>-detection/
+    sources.csv                  every candidate, brightest first (source_id 1 = brightest)
+    sources.json                 same, plus coordinate convention and field descriptions
+    detection_metadata.json      counts, SNR/FWHM statistics, background/RMS map statistics,
+                                 FWHM estimate, noise factor, config, warnings
+    preprocessing_metadata.json  the Milestone 1 metadata of the input (provenance)
+    detected_sources.png         full-resolution overlay; legend strip appended below
+    background_map.npy / .png    local background map (float32) and a visualization
+    background_rms.npy / .png    local RMS map (float32) and a visualization
+```
+
+Per-source fields: `source_id, x, y, flux, flux_err, snr, peak, fwhm, sharpness, roundness1,
+roundness2, local_background, local_rms, edge_distance, n_saturated_pixels, saturated, edge,
+centroid_method, saturated_core_axis_ratio, saturated_core_area, duplicate_of, accepted,
+rejection_reasons`. Values are in detection-plane units (source pixel values, channel mean
+for colour).
+
+Overlay markers: green circles are accepted (radius = photometry aperture), cyan circles are
+accepted but edge-flagged, small red circles are rejected, and a yellow outer ring marks
+saturation. The brightest accepted sources are labelled with their IDs.
+
+**Coordinates.** `x` is the column and `y` the row of the image array: x increases left →
+right, y increases top → bottom, and integer values are pixel centres (pixel `(0, 0)` spans
+−0.5…0.5). Nothing is flipped, resized or cropped between measurement and overlay. For FITS
+this means the overlay shows row 0 at the top, unlike the Milestone 1 preview.
+
+### Python API
+
+```python
+from astroidentify import preprocess_image
+from astroidentify.config import DetectionConfig
+from astroidentify.detection import detect_sources, save_detection_outputs
+
+detection = detect_sources(preprocess_image("data/raw/field.png"), DetectionConfig())
+detection.accepted_sources         # tuple[Source, ...], brightest first
+detection.brightest(50)            # 50 brightest accepted sources
+detection.xy_flux()                # (N, 3) array of x, y, flux: input for a future plate solver
+detection.background.background   # local background map; .rms, .subtracted
+save_detection_outputs(detection, "outputs/field-detection")
+```
+
+### Important parameters
+
+| Option / config field | Default | Effect |
+| --- | --- | --- |
+| `--detection-sigma` / `detection_sigma` | 5 | candidate threshold in local RMS units |
+| `--fwhm` / `fwhm` | estimated | stellar FWHM in px (kernel, apertures, edge margins) |
+| `--min-snr` / `min_snr` | 5 | acceptance threshold on the (correlated-noise corrected) SNR |
+| `--box-size` / `background_box_size` | 64 | background tile size: larger than stars, smaller than gradients |
+| `--saturation-level` / `saturation_level` | from metadata | saturation threshold |
+| `aperture_radius_fwhm` | 1.0 | photometry aperture radius |
+| `max_fwhm_ratio` | 2.0 | `extended` rule |
+| `correct_correlated_noise` | true | apply the empty-aperture noise factor |
+
+All values live in `DetectionConfig` (`src/astroidentify/config.py`) with documentation.
+
+### Known limitations (Milestone 2)
+
+- **SNR is background-limited.** Source photon noise is excluded (gain unknown), and SNR is a
+  ranking statistic, not a calibrated uncertainty. On heavily processed images the
+  correlated-noise factor is large (7.5 on the M57 benchmark), so many faint smudges are
+  rejected as `low_snr`. Lower `--min-snr` if you want more faint candidates.
+- **Tile-grid background.** Edge tiles compress strong gradients (3×3 grid filter), and a
+  strong gradient inside a tile inflates that tile's RMS. Extended objects of about tile size
+  (like the Ring Nebula) are partly absorbed into the background map, and its cubic
+  interpolation leaves a shallow undershoot (about 1σ) around them.
+- **Effective FWHM is a flux/peak width.** It is not a per-source fit and is inflated for
+  saturated stars.
+- **Extended structure can still produce candidates.** Detections on nebulae are filtered
+  only by general rules (width, shape, saturated-core shape). No object is recognised or
+  special-cased.
+- **Blends.** Close doubles within 2.5 FWHM are reported as one source.
+
 
 ## Development
 
@@ -165,11 +318,12 @@ own images in `data/raw/` (git-ignored); generated results go in `outputs/` (git
 
 ```text
 src/astroidentify/
-    config.py          PreprocessingConfig (all tunable values, validated)
+    config.py          PreprocessingConfig, DetectionConfig (all tunable values, validated)
     exceptions.py      domain-specific errors
     types.py           AstronomyImage, PreprocessingResult, BackgroundEstimate, ...
     logging.py         CLI logging setup (library code only logs, never prints)
-    cli.py             `astroidentify preprocess ...`
+    serialization.py   shared JSON/array/output-directory helpers
+    cli.py             `astroidentify preprocess ...` / `astroidentify detect ...`
     preprocessing/
         loader.py      JPEG/PNG/FITS -> AstronomyImage (the only format-specific code)
         background.py  background level, noise, pixel-to-pixel noise
@@ -177,12 +331,23 @@ src/astroidentify/
         preview.py     display-only preview rendering
         pipeline.py    preprocess_image() / preprocess()
         outputs.py     artifact writing and metadata.json serialization
+    detection/
+        plane.py       detection plane (grayscale or channel mean)
+        background.py  local background and RMS maps (photutils Background2D)
+        detector.py    DAOFIND candidates, supplementary peaks, FWHM estimation
+        saturation.py  saturation level/mask and saturated-core consolidation
+        measurements.py aperture photometry, SNR, correlated-noise factor, flags
+        filtering.py   rejection rules and reason codes
+        overlay.py     diagnostic overlay and map visualizations
+        outputs.py     sources.csv/json, detection_metadata.json, maps
+        pipeline.py    detect_sources() / detect_image()
+        types.py       Source, DetectionResult, coordinate convention
 ```
 
 ## Roadmap
 
 1. **Image ingestion and preprocessing** (done)
-2. Source/star detection
+2. **Source/star detection** (done)
 3. Astrometric plate solving / WCS
 4. Catalogue matching (Gaia, SIMBAD)
 5. Annotation and identification

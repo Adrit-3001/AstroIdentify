@@ -53,3 +53,15 @@ class InvalidImageError(AstroIdentifyError):
 
 class OutputError(AstroIdentifyError):
     """Output artifacts could not be written."""
+
+
+class DetectionError(AstroIdentifyError):
+    """Base class for source-detection failures."""
+
+
+class InvalidDetectionInputError(DetectionError):
+    """The preprocessing result cannot be turned into a usable detection plane."""
+
+
+class BackgroundEstimationError(DetectionError):
+    """The local background/RMS model could not be computed."""

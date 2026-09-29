@@ -6,55 +6,92 @@ AstroIdentify is an extensible astronomy/computer-vision project that will event
 
 The project must be developed incrementally. Each milestone should produce a working, testable system and should not prematurely implement later milestones.
 
-### Long-term vision
+### Development roadmap
 
-Eventually the pipeline may include:
+1. ✅ Image ingestion and preprocessing
+2. 🚧 Astronomical source/star detection
+3. ⬜ Astrometric plate solving / WCS
+4. ⬜ Catalogue matching
+5. ⬜ Object annotation and identification
+6. ⬜ Evidence/confidence estimation
+7. ⬜ Computer-vision / ML verification
+8. ⬜ Solar-system object support
+9. ⬜ FastAPI backend
+10. ⬜ Web frontend and deployment
 
-1. Image ingestion and preprocessing
-2. Astronomical source/star detection
-3. Astrometric plate solving / WCS
-4. Catalogue matching (e.g. Gaia, SIMBAD)
-5. Object annotation and identification
-6. Evidence/confidence estimation
-7. Computer-vision / ML verification
-8. Solar-system object support
-9. FastAPI backend
-10. Web frontend and deployment
-
-The current focus is **Milestone 1 only**.
+The current focus is **Milestone 2 only**.
 
 ---
 
-## 2. Current Milestone: Milestone 1 — Image Ingestion and Preprocessing
+## 2. Completed Milestones
 
-Build a reliable preprocessing foundation for astronomical images.
+### Milestone 1 — Image Ingestion and Preprocessing
 
-The milestone must support:
+Completed.
+
+The existing pipeline supports:
 
 - JPEG/JPG
 - PNG
 - FITS
+- grayscale and RGB inputs
+- float32 internal image representation
+- FITS metadata preservation
+- robust global background estimation
+- robust global noise estimation
+- per-channel diagnostics
+- neighboring-pixel/difference-noise diagnostics
+- percentile normalization without mandatory clipping
+- preview generation
+- structured metadata
+- CLI usage
+- automated tests
 
-The pipeline should:
+Milestone 1 behavior should remain backward-compatible unless a verified defect requires a change.
 
-1. Load the image.
-2. Preserve original image information whenever practical.
-3. Convert the image into a consistent internal numerical representation.
-4. Handle grayscale and RGB images.
-5. Estimate image background.
-6. Estimate image noise.
-7. Normalize the image for downstream analysis.
-8. Produce useful diagnostic information.
-9. Save a processed representation and preview.
-10. Expose the functionality through both Python APIs and a CLI.
-
-Do **not** implement source detection, plate solving, catalogue queries, ML classification, FastAPI, frontend code, or deployment in this milestone.
-
-Design for them, but do not build them yet.
+The existing preprocessing pipeline is considered stable. Do not redesign it unless a concrete bug blocks the current milestone.
 
 ---
 
-## 3. Engineering Principles
+## 3. Current Milestone: Milestone 2 — Astronomical Source / Star Detection
+
+The objective is to take the output of the Milestone 1 preprocessing pipeline and identify reliable astronomical source/star candidates for future astrometric plate solving.
+
+Milestone 2 should:
+
+1. Create a consistent 2-D detection plane from grayscale or RGB inputs.
+2. Estimate spatial/local background and background RMS.
+3. Subtract the local background for detection purposes.
+4. Detect likely stellar sources using established astronomical algorithms.
+5. Measure accurate pixel centroids.
+6. Measure brightness and useful source-shape information.
+7. Estimate source SNR where meaningful.
+8. Flag saturated sources.
+9. Flag edge sources and other potentially unreliable candidates.
+10. Apply conservative, explainable filtering.
+11. Export machine-readable source measurements.
+12. Generate diagnostic overlays showing accepted and rejected candidates.
+13. Preserve exact coordinate correspondence with the original image.
+14. Produce output suitable for the future plate-solving milestone.
+
+Do **not** implement:
+
+- astrometric plate solving;
+- WCS solving;
+- Gaia or SIMBAD catalogue queries;
+- astronomical object identification;
+- Ring Nebula / M57 recognition;
+- ML or neural-network classification;
+- Solar System ephemerides;
+- FastAPI;
+- frontend/web development;
+- deployment.
+
+Design for future milestones, but stop after source detection.
+
+---
+
+## 4. Engineering Principles
 
 ### Modularity
 
@@ -62,20 +99,20 @@ Keep astronomy logic separated by responsibility.
 
 Prefer small modules with explicit interfaces over large scripts.
 
-The project should be easy to extend with modules such as:
+The project should continue toward a structure such as:
 
 ```text
 src/astroidentify/
-    preprocessing/
-    detection/
-    astrometry/
-    catalogs/
-    annotation/
-    confidence/
-    models/
+    preprocessing/       # Milestone 1 — stable
+    detection/           # Milestone 2 — current
+    astrometry/          # future
+    catalogs/            # future
+    annotation/          # future
+    confidence/          # future
+    models/              # future
 ```
 
-Only `preprocessing` needs substantial implementation during Milestone 1.
+Only `detection/` should receive substantial new functionality during Milestone 2.
 
 ### Library first, CLI second
 
@@ -86,28 +123,28 @@ CLI commands should call library functions instead of containing business logic.
 Bad:
 
 ```python
-# CLI contains all image loading and processing logic
+# CLI contains detection implementation
 ```
 
 Good:
 
 ```python
-result = preprocess_image(path, config)
+result = detect_sources(preprocessing_result, config)
 ```
 
 and the CLI simply exposes that functionality.
 
 ### No premature ML
 
-Do not use neural networks where standard astronomical/image-processing techniques are sufficient.
+Do not use neural networks where established astronomical/image-processing methods are sufficient.
 
-Milestone 1 requires no ML.
+Milestone 2 requires no ML.
 
 ### Preserve scientific information
 
-Do not apply aggressive beautification, denoising, sharpening, or transformations that could destroy faint astronomical signals.
+Detection should operate on scientifically meaningful array data, not on cosmetically stretched previews.
 
-A preview image may be contrast-stretched for visualization, but the scientific/internal processed array must remain clearly distinguished from display-only output.
+A display overlay may use contrast stretching for visualization, but measurements must come from the aligned scientific data.
 
 ### Reproducibility
 
@@ -127,11 +164,10 @@ Fail with clear domain-specific errors.
 
 Examples:
 
-- unsupported image format
-- corrupt image
-- malformed FITS file
-- FITS file without usable image data
-- invalid dimensions
+- invalid detection-plane dimensions
+- unsupported source array shape
+- local background estimation failure
+- invalid detection configuration
 - output path failure
 
 Do not silently swallow errors.
@@ -142,52 +178,11 @@ Use Python's `logging` module.
 
 Library code must not print directly to stdout.
 
-CLI code may display user-facing summaries.
+CLI code may display concise user-facing summaries.
 
 ### Avoid unnecessary abstraction
 
-Build interfaces that support future milestones, but do not construct unused plugin systems, dependency-injection frameworks, database layers, cloud services, or web infrastructure.
-
----
-
-## 4. Recommended Repository Structure
-
-Use this structure unless there is a strong technical reason to adjust it:
-
-```text
-astroidentify/
-├── CLAUDE.md
-├── README.md
-├── pyproject.toml
-├── .gitignore
-├── src/
-│   └── astroidentify/
-│       ├── __init__.py
-│       ├── config.py
-│       ├── exceptions.py
-│       ├── logging.py
-│       ├── types.py
-│       └── preprocessing/
-│           ├── __init__.py
-│           ├── loader.py
-│           ├── background.py
-│           ├── normalize.py
-│           ├── pipeline.py
-│           └── preview.py
-├── scripts/
-├── tests/
-│   ├── preprocessing/
-│   └── fixtures/
-├── data/
-│   ├── raw/
-│   ├── processed/
-│   └── benchmark/
-└── outputs/
-```
-
-Do not commit large astronomy datasets or generated outputs.
-
-Use `.gitkeep` where necessary.
+Build interfaces that support future milestones, but do not construct unused plugin systems, dependency-injection frameworks, databases, cloud services, web infrastructure, or ML frameworks.
 
 ---
 
@@ -195,284 +190,484 @@ Use `.gitkeep` where necessary.
 
 Target modern Python, preferably Python 3.11+.
 
-Prefer mature scientific packages:
+Current scientific dependencies may include:
 
 - numpy
 - astropy
 - Pillow
-- matplotlib where useful
+- photutils
+- matplotlib where justified
+
+Development dependencies include:
+
 - pytest
-- optional: scipy if justified
+- ruff
 
-Do not add OpenCV unless it is actually required in the current milestone.
+Do not introduce PyTorch, TensorFlow, scikit-learn, web frameworks, databases, or frontend dependencies during Milestone 2.
 
-Use a `pyproject.toml` based setup.
-
-Keep runtime and development dependencies clearly separated.
+Do not add OpenCV unless there is a concrete technical reason.
 
 ---
 
-## 6. Internal Image Representation
+## 6. Milestone 1 Input Contract
 
-Create a clear internal representation for loaded/preprocessed images.
+Milestone 2 must consume the existing Milestone 1 preprocessing result instead of independently reloading or reinterpreting source files.
 
-A useful design is a dataclass such as:
+The preprocessing result already provides:
 
-```python
-@dataclass
-class AstronomyImage:
-    data: np.ndarray
-    source_path: Path
-    original_shape: tuple[int, ...]
-    is_color: bool
-    metadata: dict[str, Any]
-```
+- original image metadata
+- original dimensions
+- float32 scientific array
+- normalized array
+- valid-pixel mask information
+- background diagnostics
+- per-channel diagnostics
+- source metadata
+- normalization parameters
 
-A preprocessing result may contain:
+Milestone 2 should build on this output cleanly.
 
-```python
-@dataclass
-class PreprocessingResult:
-    image: AstronomyImage
-    normalized: np.ndarray
-    background_level: float
-    noise_sigma: float
-    diagnostics: dict[str, Any]
-```
-
-These are examples, not mandatory exact implementations.
-
-Important requirements:
-
-- downstream modules should not need to know whether the source was PNG, JPEG, or FITS;
-- FITS metadata should be preserved when available;
-- image arrays should use well-defined numeric dtypes;
-- NaN/Inf values must be handled deliberately.
+Avoid duplicate image loading or duplicate preprocessing logic.
 
 ---
 
-## 7. FITS Handling
+## 7. Detection Plane
 
-FITS is scientifically important and should be treated as a first-class format.
+JPEG/PNG inputs may be RGB while FITS images may be grayscale.
 
-Use `astropy.io.fits`.
+Create a clearly documented 2-D `detection_plane`.
+
+For grayscale:
+
+```text
+2-D scientific image
+    ↓
+detection plane
+```
+
+For RGB:
+
+```text
+RGB scientific image
+    ↓
+documented channel combination
+    ↓
+2-D detection plane
+```
+
+A channel mean or justified luminance-style combination is acceptable initially.
 
 Requirements:
 
-- locate a usable image HDU;
-- preserve relevant headers/metadata;
-- support common 2-D FITS images;
-- fail clearly on unsupported dimensionality rather than guessing;
-- handle NaN/Inf values intentionally;
-- do not normalize away meaningful dynamic range during loading.
+- preserve the original RGB data;
+- do not mutate Milestone 1 arrays;
+- isolate detection-plane generation in its own module/function;
+- document the exact combination rule;
+- keep the implementation easy to replace later;
+- output a finite 2-D floating-point array.
 
-If a FITS file contains multiple potentially usable image HDUs, choose a deterministic documented strategy.
+Do not implement complex colour science unless necessary.
 
 ---
 
-## 8. Background and Noise Estimation
+## 8. Local Background and Noise Estimation
 
-Implement robust initial estimates.
+Milestone 1 intentionally computes global diagnostics, but real telescope images can contain gradients, dense stars, nebulosity, and spatially varying background.
 
-Do not assume the image background is exactly black.
+Milestone 2 must introduce spatial/local background estimation.
 
-A reasonable first implementation may use robust statistics such as:
+`photutils.background.Background2D` is a strong default candidate.
 
-- median for background level;
-- MAD-based estimate for noise.
+A reasonable implementation may use:
 
-For example:
+- `Background2D`
+- `SigmaClip`
+- `MedianBackground`
+- a robust RMS estimator
 
-```text
-sigma ≈ 1.4826 × median(|x - median(x)|)
+The result should conceptually expose:
+
+```python
+background_map
+background_rms_map
+background_subtracted
 ```
-
-If a more astronomy-specific method is implemented, document why.
-
-Keep the estimator modular because later milestones may replace it with tiled/background-map estimation.
-
----
-
-## 9. Normalization
-
-Normalization is for downstream numerical stability, not cosmetic enhancement.
 
 Requirements:
 
-- deterministic;
-- resistant to isolated bright stars;
-- documented;
-- should not mutate the raw input;
-- avoid clipping faint sources unnecessarily.
+- configurable box/tile size;
+- sensible defaults;
+- configurable interpolation/filter behavior where justified;
+- finite outputs;
+- graceful handling of small images;
+- no hard-coded tuning specific to a single benchmark image.
 
-The result should normally be a floating-point array.
+The local background model should be visualizable for debugging.
 
-If percentile-based scaling is used, expose relevant percentiles through configuration.
-
----
-
-## 10. Preview Generation
-
-Preview output is for humans and may use display-specific stretching.
-
-Keep this separate from the scientific processed representation.
-
-A preview should:
-
-- be easy to inspect;
-- preserve aspect ratio;
-- work for grayscale and color inputs;
-- not overwrite source files;
-- be saved to a predictable output path.
-
-It is acceptable for preview generation to use percentile contrast stretching or another documented visualization transform.
+Do not use the Milestone 1 global scalar background/noise as the sole detection threshold.
 
 ---
 
-## 11. CLI
+## 9. Source Detection
 
-Provide a simple CLI suitable for development.
+Use a mature astronomical source-detection technique.
 
-Target usage such as:
+`photutils.detection.DAOStarFinder` is an appropriate default unless there is a concrete reason to choose another method.
 
-```bash
-astroidentify preprocess data/raw/m57.jpg --output outputs/m57
-```
+Detection should operate on the local-background-subtracted detection plane.
 
-or, if console entry points are not yet configured:
+Expose important detector parameters through configuration, including at minimum concepts equivalent to:
 
-```bash
-python -m astroidentify.preprocessing.pipeline data/raw/m57.jpg
-```
+- detection sigma
+- expected FWHM
 
-The command should report concise information such as:
+Choose sensible defaults, but do not bury unexplained magic numbers in implementation code.
+
+The detector should aim to:
+
+- recover faint but usable stars;
+- avoid large numbers of noise detections;
+- tolerate some elongation and non-ideal source shapes;
+- work on real consumer-telescope imagery;
+- produce coordinates suitable for future plate solving.
+
+---
+
+## 10. Source Measurement Contract
+
+Each detected candidate should expose stable machine-readable measurements such as:
+
+- source ID
+- x centroid
+- y centroid
+- peak value
+- flux or comparable brightness measure
+- SNR where meaningful
+- FWHM estimate where available
+- sharpness
+- roundness / ellipticity where available
+- local background
+- local noise
+- saturation flag
+- edge flag
+- accepted/rejected state
+- rejection reasons
+
+Do not invent measurements that are not scientifically meaningful.
+
+Future code should be able to obtain a brightness-ranked source list without reprocessing the image.
+
+---
+
+## 11. Coordinate Convention
+
+Coordinate consistency is critical for future WCS and annotation work.
+
+Use and document:
 
 ```text
-Input: data/raw/m57.jpg
-Dimensions: 1920 x 1080
-Format: JPEG
-Background estimate: 12.7
-Noise sigma: 3.4
-Processed array: outputs/m57/processed.npy
-Preview: outputs/m57/preview.png
-Metadata: outputs/m57/metadata.json
+origin: image array
+x increases left → right
+y increases top → bottom
+row zero is displayed at top
 ```
 
-Do not dump large arrays to stdout.
+No hidden image flipping, resizing, or cropping may occur between measurement and annotation unless an explicit tested transform is stored.
+
+The diagnostic overlay must remain pixel-aligned with source coordinates.
 
 ---
 
-## 12. Output Artifacts
+## 12. Saturated and Edge Sources
 
-For a successful preprocessing run, produce structured outputs similar to:
+Bright stars may contain saturated pixels.
 
-```text
-outputs/<image-name>/
-    processed.npy
-    preview.png
-    metadata.json
-```
+Saturated stars should:
 
-`metadata.json` should contain machine-readable diagnostics such as:
+- be detected when possible;
+- be flagged as saturated;
+- not automatically be discarded solely because of saturation.
+
+Use source metadata / nominal maximum where available rather than assuming every image saturates at 255.
+
+Edge sources should also be flagged when their measurements may be unreliable.
+
+Filtering should remain conservative because plate solving benefits from retaining many genuine stars.
+
+---
+
+## 13. Accepted vs Rejected Candidates
+
+Filtering must be a distinct, explainable step.
+
+Each rejected source should retain one or more reasons such as:
 
 ```json
 {
-  "source": "m57.jpg",
-  "width": 1920,
-  "height": 1080,
-  "channels": 3,
-  "background_level": 12.7,
-  "noise_sigma": 3.4,
-  "normalization": {
-    "method": "percentile",
-    "lower_percentile": 1.0,
-    "upper_percentile": 99.5
-  }
+  "accepted": false,
+  "rejection_reasons": [
+    "low_snr",
+    "too_close_to_edge"
+  ]
 }
 ```
 
-The exact schema may evolve, but centralize serialization so future versions remain manageable.
+Do not make filtering opaque.
+
+Initially prefer conservative thresholds over aggressive pruning.
+
+The goal is not a perfectly clean scientific source catalogue. The goal is a robust set of positional stellar candidates for future plate solving.
 
 ---
 
-## 13. Tests
+## 14. Benchmark Image
 
-Milestone 1 is not complete without automated tests.
+Use the real Unistellar observation already present in the repository as the primary Milestone 2 integration benchmark:
 
-At minimum test:
+```text
+data/raw/M57__Ring_Nebula-eQuinox-20260925-003755.png
+```
 
-### Loading
+Its Milestone 1 metadata showed approximately:
 
-- grayscale PNG
-- RGB PNG/JPEG
-- FITS image
-- unsupported extension
-- missing file
-- corrupt file where practical
+```text
+Dimensions: 2560 × 1920
+Format: PNG
+Channels: 3
+Background level: 9.333
+Global noise sigma: 3.954
+Difference/pixel-to-pixel noise sigma: 1.048
+R background: 8
+G background: 8
+B background: 12
+Background rejected fraction: ~7.3%
+Fraction at minimum: ~2.35%
+Fraction at maximum: ~0.12%
+```
 
-### Processing
+Important diagnostic:
 
-- output shape is correct
-- normalized output is finite
-- source input is not unexpectedly mutated
-- background estimate behaves correctly on controlled synthetic data
-- noise estimate behaves correctly on controlled synthetic data
-- NaN/Inf handling is deterministic
+```text
+global noise sigma is much larger than pixel-to-pixel noise,
+indicating large-scale background structure
+```
+
+This benchmark demonstrates why local background estimation is required.
+
+Do not optimize specifically for this image.
+
+Do not identify or special-case M57.
+
+The central nebula is not the detection target. The surrounding stellar field is.
+
+---
+
+## 15. Output Artifacts
+
+A successful detection run should produce machine-readable source results and visual diagnostics.
+
+A reasonable output structure is:
+
+```text
+outputs/<name>/
+    sources.csv
+    sources.json
+    detection_metadata.json
+    detected_sources.png
+    background_map.npy
+    background_rms.npy
+```
+
+The exact structure may evolve if the existing artifact system suggests a cleaner design.
+
+Do not duplicate large arrays unnecessarily.
+
+The detection metadata should include:
+
+- detector configuration;
+- number of raw candidates;
+- number accepted;
+- number rejected;
+- number saturated;
+- number edge-flagged;
+- summary SNR statistics;
+- summary FWHM statistics where meaningful;
+- background-map statistics;
+- RMS-map statistics;
+- warnings.
+
+---
+
+## 16. Diagnostic Overlay
+
+Generate an image overlay aligned exactly with the source image.
+
+It should visually distinguish:
+
+- accepted sources;
+- rejected candidates;
+- saturated sources;
+- optionally edge-flagged sources;
+- optionally source IDs.
+
+The overlay is a debugging and evaluation artifact.
+
+It should make obvious whether:
+
+- real stars are being found;
+- noise is being falsely accepted;
+- saturated stars are handled;
+- edge/distorted stars are retained appropriately;
+- extended objects are causing inappropriate detections.
+
+Do not resize/crop in a way that breaks coordinates unless an explicit transform is stored and tested.
+
+---
+
+## 17. CLI
+
+Extend the CLI with a detection command conceptually similar to:
+
+```bash
+astroidentify detect \
+    data/raw/M57__Ring_Nebula-eQuinox-20260925-003755.png \
+    --output outputs/m57-detection
+```
+
+It may internally invoke preprocessing if that fits the current architecture.
+
+The command should print a concise summary such as:
+
+```text
+Input: ...
+Candidates: ...
+Accepted: ...
+Rejected: ...
+Saturated: ...
+Edge flagged: ...
+Median SNR: ...
+Median FWHM: ...
+Overlay: ...
+Sources: ...
+```
+
+Do not dump full source arrays to stdout.
+
+---
+
+## 18. Tests
+
+Milestone 2 is not complete without automated tests.
+
+All Milestone 1 tests must continue to pass.
+
+Add deterministic tests for:
+
+### Detection plane
+
+- grayscale input
+- RGB input
+- correct 2-D shape
+- finite output
+- no mutation of source arrays
+
+### Background model
+
+Use synthetic images with:
+
+- flat constant background
+- known gradient
+- known noise
+- injected bright stars
+
+Verify the recovered background is reasonably close to synthetic truth.
+
+### Detection
+
+Use synthetic star fields with known positions.
+
+Test:
+
+- isolated Gaussian stars
+- stars of different brightness
+- noisy background
+- stars near edges
+- saturated star
+- slightly elongated star where practical
+
+Verify coordinate recovery within a reasonable tolerance.
+
+### Filtering
+
+Test:
+
+- low-SNR candidate
+- edge candidate
+- saturation flag
+- accepted/rejected reasons
 
 ### Outputs
 
-- preview is generated
-- processed `.npy` can be reloaded
-- metadata JSON is valid
-- CLI returns success/failure codes correctly
+Test:
 
-Use synthetic arrays for numerical unit tests rather than relying only on real astronomy images.
+- JSON serialization
+- CSV output
+- diagnostic overlay
+- coordinate preservation
 
----
+### CLI
 
-## 14. Quality Gates
+Test success and expected failure behavior.
 
-Before declaring Milestone 1 complete:
-
-1. `pytest` passes.
-2. Formatting/linting passes if configured.
-3. At least one JPEG/PNG astronomy image works end-to-end.
-4. At least one FITS image works end-to-end.
-5. CLI generates processed array, preview, and metadata.
-6. README documents installation and Milestone 1 usage.
-7. No later-milestone functionality has been unnecessarily implemented.
-8. Public APIs have type hints and docstrings where useful.
-9. No large generated data is committed.
-10. The codebase remains simple enough to understand.
+Do not write brittle tests that depend on exact source counts across dependency versions unless scientifically justified.
 
 ---
 
-## 15. Future Compatibility Requirements
+## 19. Real-Image Evaluation Requirement
 
-Although they must not be implemented now, Milestone 1 should make these future operations easy:
+After unit tests pass, run the full Milestone 2 pipeline on the M57 Unistellar image.
+
+Inspect the overlay visually.
+
+Do not merely report that the command completed.
+
+Explicitly evaluate:
+
+- whether obvious stars are detected;
+- whether large amounts of background noise are falsely detected;
+- whether saturated stars are handled;
+- whether edge/distorted stars remain useful;
+- whether the central Ring Nebula creates false stellar detections;
+- whether the local background map appears sensible.
+
+If the overlay reveals obvious problems, adjust general-purpose detection logic/configuration and re-run.
+
+Do not overfit to the M57 image.
+
+---
+
+## 20. Future Plate-Solving Compatibility
+
+The next milestone will consume source geometry and brightness.
+
+Future code should be able to do something equivalent to:
 
 ```python
-processed = preprocess_image(path)
-sources = detect_sources(processed)
-solution = solve_astrometry(sources, processed)
-objects = query_catalogs(solution)
-annotation = annotate_image(processed, objects)
+sources = detection_result.accepted_sources
+
+plate_solver_input = [
+    (source.x, source.y, source.flux)
+    for source in sources
+]
 ```
 
-The preprocessing result therefore needs to preserve enough information for:
+Coordinate quality and brightness ranking are more important during Milestone 2 than detailed astrophysical classification.
 
-- pixel coordinates;
-- original dimensions;
-- astronomical metadata;
-- later WCS attachment;
-- image display/annotation;
-- ML crops.
-
-Avoid any design that forces future modules to reload or reinterpret the original image independently.
+Do **not** implement plate solving yet.
 
 ---
 
-## 16. Coding Style
+## 21. Coding Style
 
 - Write readable Python over clever Python.
 - Keep functions focused.
@@ -482,44 +677,52 @@ Avoid any design that forces future modules to reload or reinterpret the origina
 - Document non-obvious astronomy/math decisions.
 - Keep configuration centralized.
 - Keep constants out of implementation code where they may need tuning.
-- Avoid duplicate conversion/normalization logic.
+- Avoid duplicate conversion/detection logic.
 - Use comments to explain *why*, not restate *what* the code says.
 
 ---
 
-## 17. How to Work on Tasks
+## 22. How to Work on Tasks
 
 When implementing a task:
 
 1. Inspect the existing repository first.
-2. Preserve functioning code unless there is a reason to change it.
+2. Preserve functioning Milestone 1 code unless a verified defect requires change.
 3. State assumptions when an implementation choice materially affects behavior.
 4. Implement the smallest coherent solution.
 5. Add/update tests with the implementation.
 6. Run relevant tests.
 7. Fix regressions before stopping.
 8. Update README when user-facing usage changes.
-9. Summarize exactly what changed and any remaining limitations.
+9. Run the real M57 benchmark.
+10. Inspect the resulting diagnostic overlay.
+11. Summarize exactly what changed and any remaining limitations.
 
 Do not claim tests passed unless they were actually run successfully.
 
 ---
 
-## 18. Current Definition of Done
+## 23. Current Definition of Done
 
-Milestone 1 is complete when a user can provide a supported astronomy image and run one command that:
+Milestone 2 is complete when:
 
-1. loads it;
-2. validates it;
-3. creates a consistent scientific numerical representation;
-4. estimates background and noise;
-5. normalizes it;
-6. saves the processed array;
-7. creates a visual preview;
-8. saves structured metadata;
-9. handles errors cleanly;
-10. passes the automated test suite.
+1. all Milestone 1 tests still pass;
+2. grayscale and RGB inputs produce a documented 2-D detection plane;
+3. a spatial background map is calculated;
+4. a spatial background RMS/noise map is calculated;
+5. stellar source candidates are detected;
+6. accurate source centroids are exported;
+7. useful brightness measurements are exported;
+8. saturated sources are flagged;
+9. edge/unreliable sources can be flagged;
+10. filtering decisions are explainable;
+11. accepted and rejected sources are exported in machine-readable form;
+12. an aligned diagnostic source overlay is generated;
+13. synthetic source-detection tests pass;
+14. the real Unistellar M57 image has been processed and visually inspected;
+15. lint/format checks pass;
+16. no plate solving, catalogue matching, object recognition, ML, or web functionality has been implemented.
 
 Stop there.
 
-The next milestone will introduce astronomical source/star detection, but it should only begin after the Milestone 1 output has been reviewed.
+The next milestone will use the detected stellar coordinates for astrometric plate solving.

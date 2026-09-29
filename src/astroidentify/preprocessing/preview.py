@@ -34,8 +34,10 @@ def resolve_stretch(
     return config.preview_stretch
 
 
-def render_preview(image: AstronomyImage, config: PreprocessingConfig | None = None) -> Image.Image:
-    """Render an 8-bit grayscale or RGB preview of ``image``."""
+def stretch_for_display(
+    image: AstronomyImage, config: PreprocessingConfig | None = None
+) -> np.ndarray:
+    """Return the display-stretched ``uint8`` array in array orientation (never flipped)."""
     config = config or PreprocessingConfig()
     low, high, _ = robust_range(
         image.data, config.preview_lower_percentile, config.preview_upper_percentile
@@ -45,8 +47,13 @@ def render_preview(image: AstronomyImage, config: PreprocessingConfig | None = N
     if resolve_stretch(image, config) == "asinh":
         a = config.preview_asinh_softening
         scaled = np.arcsinh(scaled / a) / np.arcsinh(1.0 / a)
+    return np.round(scaled * 255.0).astype(np.uint8)
 
-    pixels = np.round(scaled * 255.0).astype(np.uint8)
+
+def render_preview(image: AstronomyImage, config: PreprocessingConfig | None = None) -> Image.Image:
+    """Render an 8-bit grayscale or RGB preview of ``image``."""
+    config = config or PreprocessingConfig()
+    pixels = stretch_for_display(image, config)
     if image.display_origin == "lower":
         pixels = np.flipud(pixels)
     preview = Image.fromarray(np.ascontiguousarray(pixels))  # uint8 (H, W) -> L, (H, W, 3) -> RGB

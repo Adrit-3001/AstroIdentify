@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "software": {
+    "name": "astroidentify",
+    "version": "0.1.0"
+  },
+  "source": "M57__Ring_Nebula-eQuinox-20260925-003755.png",
+  "source_path": "/home/adrit/AstroIdentify/data/raw/M57__Ring_Nebula-eQuinox-20260925-003755.png",
+  "source_sha256": "c4d1bc0dd80e3bdeda8d33bdfc06d47727522da1acd87626a2c7184ebce7b4bc",
+  "format": "PNG",
+  "width": 2560,
+  "height": 1920,
+  "channels": 3,
+  "original_shape": [
+    1920,
+    2560,
+    3
+  ],
+  "original_dtype": "uint8",
+  "array_layout": {
+    "axes": [
+      "y",
+      "x",
+      "channel"
+    ],
+    "dtype": "float32",
+    "row_zero_displayed_at": "top"
+  },
+  "background_level": 9.333333015441895,
+  "noise_sigma": 3.9536056803616626,
+  "background": {
+    "level": 9.333333015441895,
+    "noise_sigma": 3.9536056803616626,
+    "method": "sigma_clipped_median(sigma=3, maxiters=5)",
+    "noise_method": "mad",
+    "n_pixels": 4915200,
+    "n_retained": 4557244,
+    "rejected_fraction": 0.07282633463541666,
+    "plane": "channel_mean",
+    "per_channel": [
+      {
+        "level": 8.0,
+        "noise_sigma": 4.447806655516806,
+        "method": "sigma_clipped_median(sigma=3, maxiters=5)",
+        "noise_method": "mad",
+        "n_pixels": 4915200,
+        "n_retained": 4553460,
+        "rejected_fraction": 0.07359619140624996
+      },
+      {
+        "level": 8.0,
+        "noise_sigma": 4.447806655516806,
+        "method": "sigma_clipped_median(sigma=3, maxiters=5)",
+        "noise_method": "mad",
+        "n_pixels": 4915200,
+        "n_retained": 4592660,
+        "rejected_fraction": 0.06562093098958333
+      },
+      {
+        "level": 12.0,
+        "noise_sigma": 7.41301109252801,
+        "method": "sigma_clipped_median(sigma=3, maxiters=5)",
+        "noise_method": "mad",
+        "n_pixels": 4915200,
+        "n_retained": 4716761,
+        "rejected_fraction": 0.04037251790364582
+      }
+    ]
+  },
+  "normalization": {
+    "method": "percentile",
+    "formula": "(x - lower_value) / (upper_value - lower_value)",
+    "lower_percentile": 1.0,
+    "upper_percentile": 99.5,
+    "lower_value": 0.0,
+    "upper_value": 189.0,
+    "clipped": false,
+    "degenerate": false,
+    "invalid_pixel_fill": "normalized_background_level",
+    "normalized_background_level": 0.04938271436741743,
+    "normalized_noise_sigma": 0.02091854857334213
+  },
+  "preview": {
+    "stretch": "linear",
+    "lower_percentile": 0.5,
+    "upper_percentile": 99.8,
+    "asinh_softening": 0.1,
+    "max_dimension": null,
+    "flipped_vertically": false
+  },
+  "diagnostics": {
+    "n_pixels": 4915200,
+    "n_invalid_pixels": 0,
+    "invalid_fraction": 0.0,
+    "min": 0.0,
+    "max": 255.0,
+    "mean": 13.100788235134548,
+    "std": 21.100529567729446,
+    "fraction_at_min": 0.023482530381944443,
+    "fraction_at_max": 0.0012053765190972222,
+    "background_rejected_fraction": 0.07282633463541666,
+    "difference_noise_sigma": 1.0483580825075305,
+    "warnings": [
+      "invalid PNG EXIF metadata CRC was ignored; pixel data was preserved",
+      "global noise sigma (3.954) is much larger than the pixel-to-pixel noise (1.048): the background has large-scale structure (nebulosity or gradients), which a single global background estimate cannot model"
+    ]
+  },
+  "source_metadata": {
+    "raster": {
+      "pillow_format": "PNG",
+      "n_frames": 1,
+      "icc_profile_present": false,
+      "info": {
+        "srgb": 0
+      },
+      "png_bit_depth": 8,
+      "png_color_type": 2,
+      "pil_mode": "RGB",
+      "converted_mode": null,
+      "alpha_dropped": false,
+      "exif_orientation": 1,
+      "orientation_applied": false,
+      "nominal_max": 255
+    }
+  },
+  "config": {
+    "fits_hdu": null,
+    "min_dimension": 8,
+    "background_clip_sigma": 3.0,
+    "background_clip_maxiters": 5,
+    "normalization_lower_percentile": 1.0,
+    "normalization_upper_percentile": 99.5,
+    "normalization_clip": false,
+    "preview_lower_percentile": 0.5,
+    "preview_upper_percentile": 99.8,
+    "preview_stretch": "auto",
+    "preview_asinh_softening": 0.1,
+    "preview_max_dimension": null
+  },
+  "artifacts": {}
+}

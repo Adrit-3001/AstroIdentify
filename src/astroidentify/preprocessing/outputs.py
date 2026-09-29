@@ -12,20 +12,24 @@ Artifacts written to the output directory:
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
-import math
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from astroidentify import __version__
-from astroidentify.exceptions import OutputError
 from astroidentify.preprocessing.preview import resolve_stretch, save_preview
+from astroidentify.serialization import (
+    ensure_not_source,
+    prepare_output_dir,
+    remove_file,
+    save_array,
+    sha256_file,
+    to_jsonable,
+    write_json,
+)
 from astroidentify.types import BackgroundEstimate, PreprocessingResult
 
 logger = logging.getLogger(__name__)
@@ -65,14 +69,7 @@ def save_outputs(result: PreprocessingResult, output_dir: str | Path) -> OutputP
         OutputError: If the directory cannot be created, an artifact would overwrite the
             source image, or a file cannot be written.
     """
-    directory = Path(output_dir).expanduser()
-    if directory.exists() and not directory.is_dir():
-        raise OutputError(f"output path exists and is not a directory: {directory}")
-    try:
-        directory.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise OutputError(f"could not create output directory {directory}: {exc}") from exc
-
+    directory = prepare_output_dir(output_dir)
     has_invalid = not bool(np.all(result.valid_mask))
     paths = OutputPaths(
         directory=directory,
@@ -81,20 +78,19 @@ def save_outputs(result: PreprocessingResult, output_dir: str | Path) -> OutputP
         metadata=directory / METADATA_FILENAME,
         mask=directory / MASK_FILENAME if has_invalid else None,
     )
-    source = result.image.source_path.resolve()
     stale_mask = directory / MASK_FILENAME
-    for target in (paths.processed, paths.preview, paths.metadata, stale_mask):
-        if target.resolve() == source:
-            raise OutputError(f"refusing to overwrite the source image {source}")
+    ensure_not_source(
+        (paths.processed, paths.preview, paths.metadata, stale_mask), result.image.source_path
+    )
 
-    _save_array(paths.processed, result.normalized)
+    save_array(paths.processed, result.normalized)
     if paths.mask is not None:
-        _save_array(paths.mask, result.valid_mask)
+        save_array(paths.mask, result.valid_mask)
     elif stale_mask.exists():
         # A mask from an earlier run would contradict this run's metadata.
-        _remove(stale_mask)
+        remove_file(stale_mask)
     save_preview(result.image, paths.preview, result.config)
-    _write_json(paths.metadata, build_metadata(result, paths))
+    write_json(paths.metadata, build_metadata(result, paths))
     logger.info("Wrote outputs to %s", directory)
     return paths
 
@@ -110,7 +106,7 @@ def build_metadata(result: PreprocessingResult, paths: OutputPaths | None = None
             "software": {"name": "astroidentify", "version": __version__},
             "source": image.source_path.name,
             "source_path": str(image.source_path),
-            "source_sha256": _sha256(image.source_path),
+            "source_sha256": sha256_file(image.source_path),
             "format": image.format.value,
             "width": image.width,
             "height": image.height,
@@ -158,31 +154,6 @@ def build_metadata(result: PreprocessingResult, paths: OutputPaths | None = None
     )
 
 
-def to_jsonable(value: Any) -> Any:
-    """Recursively convert ``value`` to strict-JSON-compatible types.
-
-    NumPy scalars become Python numbers, paths and enums become strings, tuples become
-    lists, and non-finite floats become ``None`` (strict JSON has no NaN/Infinity).
-    """
-    if isinstance(value, dict):
-        return {str(k): to_jsonable(v) for k, v in value.items()}
-    if isinstance(value, list | tuple):
-        return [to_jsonable(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return to_jsonable(value.tolist())
-    if isinstance(value, np.generic):
-        value = value.item()
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
-    if value is None or isinstance(value, bool | int | float | str):
-        return value
-    return str(value)
-
-
 def _background_dict(estimate: BackgroundEstimate) -> dict[str, Any]:
     return {
         "level": estimate.level,
@@ -204,36 +175,3 @@ def _artifact_names(paths: OutputPaths | None) -> dict[str, str | None]:
         "metadata": paths.metadata.name,
         "valid_mask": paths.mask.name if paths.mask else None,
     }
-
-
-def _sha256(path: Path) -> str | None:
-    """Content hash of the source for provenance; ``None`` for in-memory images."""
-    if not path.is_file():
-        return None
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _save_array(path: Path, array: np.ndarray) -> None:
-    try:
-        with path.open("wb") as fh:
-            np.save(fh, array, allow_pickle=False)
-    except OSError as exc:
-        raise OutputError(f"could not write {path}: {exc}") from exc
-
-
-def _write_json(path: Path, document: dict[str, Any]) -> None:
-    try:
-        path.write_text(json.dumps(document, indent=2, allow_nan=False) + "\n", encoding="utf-8")
-    except OSError as exc:
-        raise OutputError(f"could not write {path}: {exc}") from exc
-
-
-def _remove(path: Path) -> None:
-    try:
-        path.unlink()
-    except OSError as exc:
-        raise OutputError(f"could not remove stale {path}: {exc}") from exc
