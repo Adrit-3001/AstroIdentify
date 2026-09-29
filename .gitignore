@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Data and generated outputs (never commit large datasets or results)
+data/raw/*
+data/processed/*
+data/benchmark/*
+outputs/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/benchmark/.gitkeep
+!outputs/.gitkeep
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
