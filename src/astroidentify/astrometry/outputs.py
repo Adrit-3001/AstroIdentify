@@ -61,6 +61,7 @@ SELECTED_COLUMNS = (
     "edge",
     "tier",
     "cell",
+    "astrometric_method",
 )
 CORRESPONDENCE_COLUMNS = (
     "source_id",
@@ -173,7 +174,8 @@ def selection_to_csv(selection: SourceSelection) -> str:
     for s in sorted(selection.sources, key=lambda s: s.rank):
         writer.writerow(
             [s.rank, s.source_id, repr(s.x), repr(s.y), repr(s.flux), repr(s.snr),
-             str(s.saturated).lower(), str(s.edge).lower(), s.tier, f"{s.cell[0]};{s.cell[1]}"]
+             str(s.saturated).lower(), str(s.edge).lower(), s.tier, f"{s.cell[0]};{s.cell[1]}",
+             s.astrometric_method]
         )  # fmt: skip
     return buffer.getvalue()
 

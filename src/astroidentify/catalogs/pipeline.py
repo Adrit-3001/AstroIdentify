@@ -187,7 +187,8 @@ def match_catalog(
     if mags is None:
         mags = np.full(len(rows), np.nan)
 
-    det_xy = np.array([(s.x, s.y) for s in detections], float)
+    # Astrometric centroids: corrected for the saturated-core bias (Milestone 2).
+    det_xy = np.array([s.astrometric_xy for s in detections], float)
     det_ids = np.array([s.source_id for s in detections], np.int64)
     det_saturated = np.array([s.saturated for s in detections], bool)
 

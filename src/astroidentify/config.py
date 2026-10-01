@@ -147,6 +147,17 @@ class DetectionConfig:
             "empty aperture" noise (accounts for spatially correlated noise).
         empty_aperture_min_count: Minimum number of source-free apertures needed to measure
             the correlated-noise factor; otherwise no correction is applied.
+        astrometric_centroid: Compute isophote-calibrated astrometric centroids for
+            saturated cores (``detection.astrometric_centroid``). ``False`` makes the
+            astrometric centroid equal to the detection centroid for every source.
+        isophote_calibration_max_stars: Maximum unsaturated stars stacked for the
+            isophote calibration (the brightest suitable ones).
+        isophote_calibration_min_stars: Fewer suitable stars -> no calibration; saturated
+            cores keep their plateau centroid (``saturated_core_fallback``).
+        isophote_stack_half_width_fwhm: Half-size of the stacked-PSF cutout, in FWHM. Bounds
+            the largest isophote (and so the largest saturated core) that can be corrected.
+        isophote_isolation_fwhm: Stacked stars have no other accepted detection within this
+            many FWHM.
         overlay_max_labels: Label this many of the brightest accepted sources with their ID.
     """
 
@@ -179,6 +190,12 @@ class DetectionConfig:
     correct_correlated_noise: bool = True
     empty_aperture_min_count: int = 30
 
+    astrometric_centroid: bool = True
+    isophote_calibration_max_stars: int = 150
+    isophote_calibration_min_stars: int = 10
+    isophote_stack_half_width_fwhm: float = 5.0
+    isophote_isolation_fwhm: float = 4.0
+
     overlay_max_labels: int = 100
 
     def __post_init__(self) -> None:
@@ -191,6 +208,8 @@ class DetectionConfig:
             "background_clip_sigma": self.background_clip_sigma,
             "max_abs_roundness": self.max_abs_roundness,
             "max_fwhm_ratio": self.max_fwhm_ratio,
+            "isophote_stack_half_width_fwhm": self.isophote_stack_half_width_fwhm,
+            "isophote_isolation_fwhm": self.isophote_isolation_fwhm,
         }
         for name, value in positive.items():
             if not value > 0:
@@ -201,6 +220,11 @@ class DetectionConfig:
             raise ConfigurationError(
                 "fwhm bounds must satisfy fwhm_min <= fwhm_initial_guess <= fwhm_max, got "
                 f"{self.fwhm_min}, {self.fwhm_initial_guess}, {self.fwhm_max}"
+            )
+        if not 1 <= self.isophote_calibration_min_stars <= self.isophote_calibration_max_stars:
+            raise ConfigurationError(
+                "isophote calibration star counts must satisfy 1 <= min <= max, got "
+                f"{self.isophote_calibration_min_stars}, {self.isophote_calibration_max_stars}"
             )
         if self.background_box_size < 4:
             raise ConfigurationError(

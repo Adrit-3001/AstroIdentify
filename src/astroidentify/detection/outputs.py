@@ -121,7 +121,8 @@ def sources_to_csv(sources: tuple[Source, ...] | list[Source]) -> str:
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow(CSV_COLUMNS)
     for source in sources:
-        writer.writerow(_csv_value(getattr(source, name)) for name in CSV_COLUMNS)
+        record = source.to_dict()
+        writer.writerow(_csv_value(record[name]) for name in CSV_COLUMNS)
     return buffer.getvalue()
 
 
@@ -194,7 +195,12 @@ def build_detection_metadata(
                 "saturated": "extra yellow ring",
             },
         },
-        "summary": {k: v for k, v in result.diagnostics.items() if k != "warnings"},
+        "summary": {
+            k: v
+            for k, v in result.diagnostics.items()
+            if k not in ("warnings", "astrometric_centroid")
+        },
+        "astrometric_centroid": result.diagnostics.get("astrometric_centroid"),
         "rejection_reasons": REJECTION_REASONS,
         "warnings": list(result.warnings),
         "config": result.config.to_dict(),
@@ -223,6 +229,9 @@ def load_sources(path: str | Path) -> list[Source]:
             if values.get(name) is None:
                 values[name] = float("nan")
         values["rejection_reasons"] = tuple(values.get("rejection_reasons") or ())
+        if values.get("astrometric_method", "detection") == "detection":
+            # Same as x/y by definition; keep it unset (see Source.astrometric_x).
+            values["astrometric_x"] = values["astrometric_y"] = None
         try:
             sources.append(
                 Source(**{f.name: values[f.name] for f in fields(Source) if f.name in values})
@@ -243,7 +252,7 @@ def _csv_value(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, float):
         return "" if value != value else format(value, ".10g")  # NaN -> empty
-    if isinstance(value, tuple):
+    if isinstance(value, tuple | list):
         return ";".join(value)
     return str(value)
 

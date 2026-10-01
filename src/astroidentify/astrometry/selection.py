@@ -16,10 +16,12 @@ Strategy:
      the brightness-pooled list solved blind in seconds.
    * ``sequential``: better tiers are used up first (e.g. an unsaturated-only attempt for
      images whose saturated centroids are unreliable).
-3. **Brightness.** Within a tier, sources are ranked by flux (then SNR, then position, for
+3. **Position.** Every selected position is the Milestone 2 *astrometric* centroid
+   (``Source.astrometric_x/y``), which corrects the asymmetric-PSF bias of saturated cores.
+4. **Brightness.** Within a tier, sources are ranked by flux (then SNR, then position, for
    determinism). Blind solvers match the brightest field stars to the brightest catalogue
    stars, so brightness matters more than SNR once a source is clearly real.
-4. **Spatial balancing.** The image is divided into a grid whose shape follows the aspect
+5. **Spatial balancing.** The image is divided into a grid whose shape follows the aspect
    ratio. Sources are taken round-robin, the brightest remaining in each cell per round, so
    the set cannot collapse onto the brightest or densest region of the frame.
 
@@ -145,14 +147,15 @@ def select_from_sources(
         SelectedSource(
             rank=rank,
             source_id=source.source_id,
-            x=source.x,
-            y=source.y,
+            x=source.astrometric_xy[0],
+            y=source.astrometric_xy[1],
             flux=source.flux,
             snr=source.snr,
             saturated=source.saturated,
             edge=source.edge,
             tier=tier,
             cell=_cell(source, width, height, shape),
+            astrometric_method=source.astrometric_method,
         )
         for rank, (source, tier) in enumerate(chosen, start=1)
     )
@@ -201,8 +204,9 @@ def _balanced(
 def _cell(source: Source, width: int, height: int, shape: tuple[int, int]) -> tuple[int, int]:
     columns, rows = shape
     # Pixel centres span -0.5..W-0.5; clamp so edge centroids stay in the grid.
-    column = min(columns - 1, max(0, int((source.x + 0.5) * columns / width)))
-    row = min(rows - 1, max(0, int((source.y + 0.5) * rows / height)))
+    x, y = source.astrometric_xy
+    column = min(columns - 1, max(0, int((x + 0.5) * columns / width)))
+    row = min(rows - 1, max(0, int((y + 0.5) * rows / height)))
     return column, row
 
 

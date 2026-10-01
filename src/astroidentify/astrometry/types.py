@@ -33,12 +33,15 @@ class SelectedSource:
     Attributes:
         rank: 1-based position in the solver source list (brightest first).
         source_id: Milestone 2 ``source_id``.
-        x, y: Canonical pixel coordinates (unchanged from detection).
+        x, y: Canonical pixel coordinates of the Milestone 2 *astrometric* centroid
+            (``Source.astrometric_x/y``): the detection centroid, except for saturated cores
+            corrected by the isophote calibration (see ``astrometric_method``).
         flux: Milestone 2 aperture flux (brightness ranking).
         snr: Milestone 2 SNR.
         saturated, edge: Milestone 2 flags.
         tier: Quality tier (``TIER_*``).
         cell: ``(column, row)`` of the spatial-balancing grid cell.
+        astrometric_method: Milestone 2 ``astrometric_method`` of the source.
     """
 
     rank: int
@@ -51,6 +54,7 @@ class SelectedSource:
     edge: bool
     tier: str
     cell: tuple[int, int]
+    astrometric_method: str = "detection"
 
     def to_dict(self) -> dict[str, Any]:
         record = asdict(self)

@@ -53,7 +53,7 @@ def render_catalog_overlay(
     unmatched = set(result.unmatched_detection_ids)
     for source in result.detections:
         if source.source_id in unmatched:
-            _circle(draw, source.x, source.y, ring, UNMATCHED_COLOR, line)
+            _circle(draw, *source.astrometric_xy, ring, UNMATCHED_COLOR, line)
     for match in result.matches:
         _circle(draw, match.observed_x_px, match.observed_y_px, ring, MATCH_COLOR, line)
         dx = (match.observed_x_px - match.predicted_x_px) * RESIDUAL_MAGNIFICATION

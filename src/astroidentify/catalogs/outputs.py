@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from astropy.io import fits
 
 from astroidentify import __version__
 from astroidentify.catalogs.overlay import RESIDUAL_MAGNIFICATION, render_catalog_overlay
@@ -92,7 +93,9 @@ def save_catalog_outputs(
         header = result.wcs_used.to_header(relax=True)
         header["IMAGEW"], header["IMAGEH"] = image.width, image.height
         try:
-            header.tofile(paths.refined_wcs, overwrite=True)
+            # A PrimaryHDU adds SIMPLE/BITPIX/NAXIS, making a valid header-only FITS file
+            # (``Header.tofile`` alone omits SIMPLE, which FITS readers reject).
+            fits.PrimaryHDU(header=header).writeto(paths.refined_wcs, overwrite=True)
         except OSError as exc:
             raise OutputError(f"could not write {paths.refined_wcs}: {exc}") from exc
     elif (directory / REFINED_WCS).exists():

@@ -1,7 +1,7 @@
 """Milestone 2 pipeline.
 
 detection plane -> local background -> FWHM -> DAOFIND -> saturated-core consolidation ->
-measurement -> numbering by brightness -> filtering.
+measurement -> numbering by brightness -> filtering -> astrometric centroids.
 
 Typical use::
 
@@ -21,6 +21,11 @@ from typing import Any
 import numpy as np
 
 from astroidentify.config import DetectionConfig, PreprocessingConfig
+from astroidentify.detection.astrometric_centroid import (
+    apply_astrometric_centroids,
+    astrometric_summary,
+    build_isophote_calibration,
+)
 from astroidentify.detection.background import (
     estimate_local_background,
     map_statistics,
@@ -94,6 +99,7 @@ def detect_sources(
 
     sources: tuple[Source, ...] = ()
     reference_fwhm = None
+    calibration, calibration_note = None, "disabled"
     if len(candidates) == 0:
         _note(warnings, "no source candidates found above the detection threshold")
     else:
@@ -115,7 +121,14 @@ def detect_sources(
         )
         numbered = _number_by_brightness(measured, cores.primary_index)
         filtered, reference_fwhm = apply_filters(numbered, fwhm.value, config)
-        sources = tuple(filtered)
+        if config.astrometric_centroid:
+            calibration, calibration_note = build_isophote_calibration(
+                filtered, background.subtracted, saturated_pixels, fwhm.value, config
+            )
+            if calibration is None and any(s.saturated and s.accepted for s in filtered):
+                _note(warnings, f"saturated-star astrometric calibration unavailable: "
+                                f"{calibration_note}")  # fmt: skip
+        sources = tuple(apply_astrometric_centroids(filtered, calibration))
         if not any(s.accepted for s in sources):
             _note(warnings, "no candidates passed filtering")
 
@@ -125,6 +138,9 @@ def detect_sources(
         reference_effective_fwhm=reference_fwhm,
         noise_correlation_factor=noise_factor,
         n_empty_apertures=n_empty,
+        astrometric_centroid=astrometric_summary(
+            sources, calibration, calibration_note, config.astrometric_centroid
+        ),
         warnings=warnings,
     )
     logger.info(

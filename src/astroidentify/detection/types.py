@@ -173,18 +173,33 @@ class Source:
     duplicate_of: int | None = None
     accepted: bool = True
     rejection_reasons: tuple[str, ...] = ()
+    # ``None`` means "same as the detection centroid" (x, y); see ``astrometric_xy``. Keeping
+    # it unset (rather than a copy of x/y) means it can never go stale if x/y are replaced.
+    astrometric_x: float | None = None
+    astrometric_y: float | None = None
+    astrometric_method: str = "detection"
+    astrometric_correction_px: float = 0.0
+
+    @property
+    def astrometric_xy(self) -> tuple[float, float]:
+        """Position to use for astrometry (plate solving, catalogue matching)."""
+        if self.astrometric_x is None or self.astrometric_y is None:
+            return self.x, self.y
+        return self.astrometric_x, self.astrometric_y
 
     def to_dict(self) -> dict[str, Any]:
+        """Plain record; the astrometric centroid is always written out explicitly."""
         record = asdict(self)
         record["rejection_reasons"] = list(self.rejection_reasons)
+        record["astrometric_x"], record["astrometric_y"] = self.astrometric_xy
         return record
 
 
 #: Column descriptions, exported with the source tables.
 SOURCE_FIELDS: dict[str, str] = {
     "source_id": "1-based ID in order of decreasing flux (1 = brightest candidate)",
-    "x": "centroid column in pixels (see centroid_method)",
-    "y": "centroid row in pixels (see centroid_method)",
+    "x": "detection centroid column in pixels (see centroid_method); used for photometry",
+    "y": "detection centroid row in pixels (see centroid_method); used for photometry",
     "flux": "background-subtracted sum in a circular aperture of radius aperture_radius",
     "flux_err": "background-limited error: sqrt(sum of RMS-map^2 over the aperture) times "
     "the empirical correlated-noise factor",
@@ -211,6 +226,14 @@ SOURCE_FIELDS: dict[str, str] = {
     "duplicate_of": "source_id of the primary detection on the same saturated core, else null",
     "accepted": "passed all filters",
     "rejection_reasons": "filters the candidate failed (empty if accepted)",
+    "astrometric_x": "astrometric centroid column in pixels, used for plate solving and "
+    "catalogue matching; equals x unless astrometric_method is 'isophote_calibrated'",
+    "astrometric_y": "astrometric centroid row in pixels (see astrometric_x)",
+    "astrometric_method": "'detection' (same as x/y), 'isophote_calibrated' (saturated-core "
+    "centroid corrected for the isophote offset of the image's own PSF) or "
+    "'saturated_core_fallback' (saturated core outside the calibrated range, or no "
+    "calibration: x/y kept)",
+    "astrometric_correction_px": "distance between the astrometric and detection centroids",
 }
 
 
@@ -254,8 +277,8 @@ class DetectionResult:
         return ranked if n is None else ranked[:n]
 
     def xy_flux(self, *, accepted_only: bool = True) -> np.ndarray:
-        """``(N, 3)`` array of ``x, y, flux``, brightest first (plate-solver input)."""
-        rows = [(s.x, s.y, s.flux) for s in self.brightest(accepted_only=accepted_only)]
+        """``(N, 3)`` array of astrometric ``x, y`` and flux, brightest first (solver input)."""
+        rows = [(*s.astrometric_xy, s.flux) for s in self.brightest(accepted_only=accepted_only)]
         return np.array(rows, dtype=np.float64).reshape(-1, 3)
 
 

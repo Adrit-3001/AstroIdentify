@@ -12,6 +12,7 @@ The project is built in milestones:
 | 2. Stellar source detection | complete |
 | 3. Blind plate solving (WCS) | complete |
 | 4. Catalogue matching (Gaia DR3) | complete |
+| 4.1 Saturated-star astrometric centroids | complete |
 | 5+. Object identification, confidence, ML, API, frontend | not started |
 
 With a local Astrometry.net installation, AstroIdentify determines where an unknown image
@@ -218,7 +219,7 @@ Edge flagged: 117 (9 accepted)
    `--saturation-level`. Detections on the same connected saturated core are merged: the
    brightest is repositioned to the core centroid (`centroid_method = saturated_core`) and
    the rest are rejected as duplicates. Saturated stars are flagged, never rejected for
-   saturation alone.
+   saturation alone. The plateau centroid is biased on asymmetric PSFs; step 8 corrects it.
 6. **Measurements.** Aperture photometry (radius 1 FWHM) on the background-subtracted plane
    gives `flux`, `flux_err` and `snr`. `flux_err` is scaled by an empirical
    **correlated-noise factor**: the scatter of identical apertures placed on source-free sky,
@@ -237,6 +238,12 @@ Edge flagged: 117 (9 accepted)
    | `elongated_saturated_region` | saturated region ≥ 1 FWHM across with axis ratio < 0.5 |
    | `duplicate_of_saturated_source` | a second detection on an already-used saturated core |
 
+8. **Astrometric centroids** (Milestone 4.1). Every source also gets an astrometric centroid,
+   `astrometric_x/astrometric_y`, which plate solving and catalogue matching use. It equals
+   `x/y` for everything except saturated cores, which are corrected by the image's own
+   isophote calibration (see [Milestone 4.1](#milestone-41-saturated-star-astrometric-centroids)).
+   `x/y` stay the detection centroid used for photometry.
+
 ### Detection outputs
 
 ```text
@@ -254,7 +261,8 @@ outputs/<name>-detection/
 Per-source fields: `source_id, x, y, flux, flux_err, snr, peak, fwhm, sharpness, roundness1,
 roundness2, local_background, local_rms, edge_distance, n_saturated_pixels, saturated, edge,
 centroid_method, saturated_core_axis_ratio, saturated_core_area, duplicate_of, accepted,
-rejection_reasons`. Values are in detection-plane units (source pixel values, channel mean
+rejection_reasons, astrometric_x, astrometric_y, astrometric_method,
+astrometric_correction_px`. Values are in detection-plane units (source pixel values, channel mean
 for colour).
 
 Overlay markers: green circles are accepted (radius = photometry aperture), cyan circles are
@@ -276,7 +284,7 @@ from astroidentify.detection import detect_sources, save_detection_outputs
 detection = detect_sources(preprocess_image("data/raw/field.png"), DetectionConfig())
 detection.accepted_sources         # tuple[Source, ...], brightest first
 detection.brightest(50)            # 50 brightest accepted sources
-detection.xy_flux()                # (N, 3) array of x, y, flux: input for a future plate solver
+detection.xy_flux()                # (N, 3) astrometric x, y and flux: plate-solver input
 detection.background.background   # local background map; .rms, .subtracted
 save_detection_outputs(detection, "outputs/field-detection")
 ```
@@ -496,13 +504,11 @@ save_astrometry_outputs(solution, detection, "outputs/field-astrometry")
 - Distortion is modelled by the solver's SIP polynomial (default order 2). On the benchmark
   the SIP correction is about 1.7″ at the corners and residuals show no strong field
   dependence, so no extra distortion model is used.
-- Residuals (median about 1.2″) are dominated by saturated-core centroid scatter, because the
-  index stars are the saturated ones.
-- **Zero-point bias found in Milestone 4.** On comet-shaped (coma) PSFs, the centroid of a large
-  saturated core is biased by up to ~5 px relative to ordinary stars. The benchmark WCS is
-  anchored on the 25 brightest saturated stars, so it is consistent with them but offset by
-  about 4″ for typical stars. Milestone 4 measures this and matches with a catalogue-refined
-  WCS; the Milestone 3 WCS file itself is unchanged.
+- The index stars are the saturated ones, so the solution depends on saturated-star centroids.
+  Since Milestone 4.1 the source list uses the isophote-calibrated astrometric centroid. On the
+  benchmark this lowered the solver's residual from 1.22″ to 0.66″ median and the WCS offset
+  for typical (unsaturated) stars from about 4.2″ to 1.6″. The remaining offset is mostly a
+  ~0.09% scale difference between the solver's SIP fit and a TAN fit to the faint stars.
 - A fully blind search over all installed index scales is slow when the field's index stars
   are not in the list; camera-derived `--scale-low/--scale-high` bounds speed solving up a lot.
 - Debugging tools for this milestone live in `scripts/m57_astrometry_diagnostics.py`
@@ -620,10 +626,10 @@ distinct errors. "No matches" is a valid result, not an error.
 
 ### Known limitations (Milestone 4)
 
-- **Bright saturated stars are mostly unmatched.** Stars brighter than G≈11 have large saturated
-  cores whose centroids are biased by ~4–5 px on this telescope's comet-shaped PSF, beyond the
-  3″ radius (22 of the 29 unmatched detections). A better saturated-star centroid in
-  Milestone 2 would fix this at the source.
+- **The very brightest saturated stars.** Before Milestone 4.1, stars brighter than G≈11 had
+  core centroids biased by ~4–5 px (22 of 29 unmatched detections). With the astrometric
+  centroid, 111 of 116 accepted saturated stars match (5 unmatched). Cores larger than the
+  calibrated isophote range keep the uncorrected centroid.
 - Without an observation timestamp, positions are at the Gaia epoch (J2016). High-proper-motion
   stars (above ~0.2″/yr) can then miss the radius after a decade. `--observation-date` enables
   propagation.
@@ -631,6 +637,86 @@ distinct errors. "No matches" is a valid result, not an error.
   plain-TAN refined WCS.
 - Gaia DR3 only; other catalogues would be new providers behind the same interface.
 - Named-object identification (e.g. which nebula is in the field) is **not** implemented.
+
+## Milestone 4.1: saturated-star astrometric centroids
+
+**Problem.** A saturated star's clipped plateau is the PSF's isophote at the saturation level.
+Its centroid equals the star's position only for a point-symmetric PSF. On the benchmark
+telescope's comet-shaped PSF (tail toward the upper left), the plateau centroid moves toward
+the tail as the star gets brighter: about 0.5 px for 30–100 px cores and up to 5–7 px for the
+largest ones. Milestone 3 anchors its WCS on these stars, so it inherited the bias.
+
+**Method** (`detection/astrometric_centroid.py`; image data only, no catalogue at run time):
+
+1. Stack up to 150 bright, isolated, unsaturated, non-edge DAOFIND stars. Each is aligned on
+   its DAOFIND centroid (the astrometric reference for all other sources) and normalised by
+   flux, then the per-pixel median is taken: the image's own PSF.
+2. For 80 isophote levels (0.95 → 0.01 of the peak), record the isophote's area and its
+   centroid offset from the PSF centre. Stop once an isophote touches the stack border.
+3. For a saturated core of area *A*: `astrometric = core centroid − offset(A)`, interpolated
+   and anchored so the smallest (peak) isophote has zero correction.
+4. Fallback: no calibration (fewer than 10 suitable stars) or a core larger than the largest
+   calibrated isophote → the core centroid is kept, as `astrometric_method =
+   saturated_core_fallback`. Nothing is extrapolated.
+
+Matching isophotes by *area* makes this independent of any monotonic tone curve, so it works on
+stretched 8-bit images. No thresholds are tuned to a target, and Gaia is not used.
+
+**Data model.** `Source.x/y` (detection centroid, photometry), `centroid_method` and
+`source_id` are unchanged. New fields: `astrometric_x`, `astrometric_y`, `astrometric_method`
+(`detection` | `isophote_calibrated` | `saturated_core_fallback`) and
+`astrometric_correction_px`. Plate-solver selection and XYLS export (`SelectedSource.x/y`, with
+an `astrometric_method` column), `DetectionResult.xy_flux()` and Gaia matching use the
+astrometric centroid. The calibration curve is recorded under `astrometric_centroid` in
+`detection_metadata.json`. `DetectionConfig.astrometric_centroid=False` turns it off. Files
+written before 4.1 load with the astrometric centroid equal to `x/y`.
+
+**Evaluation** (offline, `scripts/saturated_centroid_diagnostics.py`). The reference is Gaia
+DR3 projected through the Milestone 4 refined WCS, which is fitted to unsaturated stars only.
+110 saturated stars have an unambiguous Gaia counterpart. They were split by `source_id`
+parity: parameters were chosen on the even IDs and are reported on the 54 odd (held-out) IDs.
+
+| Method | median px | RMS px | p90 px | median dx, dy px | failures |
+| --- | --- | --- | --- | --- | --- |
+| current plateau centroid | 1.17 | 2.73 | 4.45 | −0.44, −0.43 | 0% |
+| unsaturated-wing centre of light | 4.11 | 5.12 | 7.45 | −2.08, −2.65 | 0% |
+| masked-core 2-D Gaussian fit | 3.63 | 4.39 | 6.82 | −1.59, −2.51 | 7% |
+| wing point-symmetry | 1.28 | 3.05 | 5.12 | −0.54, −0.66 | 87% |
+| saturation-depth-weighted core | 1.10 | 2.93 | 4.75 | −0.55, −0.40 | 0% |
+| **isophote-calibrated core (production)** | **0.82** | **1.34** | **2.28** | −0.19, +0.08 | 0% |
+
+Wing-based methods do worse because the comet tail dominates the unsaturated wings.
+
+| Held-out core size | n | current median / RMS | isophote median / RMS |
+| --- | --- | --- | --- |
+| 1–30 px | 21 | 0.46 / 0.93 | 0.50 / 0.98 |
+| 30–100 px | 16 | 0.85 / 1.03 | 0.77 / 0.78 |
+| ≥ 100 px | 17 | 4.28 / 4.64 | 2.02 / 1.98 |
+
+Unsaturated sources are bit-identical: 0.0 px change on all 472 Gaia-associated ones.
+
+**Effect on Milestones 3 and 4** (benchmark, fully blind, no scale bounds):
+
+| | before | after |
+| --- | --- | --- |
+| solver residual (median / RMS) | 1.22″ / 2.01″ | 0.66″ / 0.87″ |
+| blind WCS vs Gaia-refined WCS, 519 unsaturated stars (median) | 4.89 px (4.19″) | 1.89 px (1.62″) |
+| M4 input-WCS median offset | 4.14″ | 1.84″ |
+| Gaia matches (of 643) | 614 | 630 |
+| saturated matched / unmatched (of 116) | 95 / 21 | 111 / 5 |
+| brightest 100 detections matched | 79 | 95 |
+| M4 median / RMS residual | 0.668″ / 0.982″ | 0.674″ / 0.977″ |
+
+**Limitations.**
+
+- The calibration assumes the PSF shape (and so the isophote offsets) is constant across the
+  field. Field-dependent coma would need a spatially varying calibration, which was not
+  attempted.
+- Cores larger than the stack's largest isophote (5 FWHM half-width) fall back (1 star on the
+  benchmark).
+- Small cores (< 30 px) see no improvement: their bias is already below the centroid noise.
+- The plateau is defined on the raw channels and the stack on the channel-mean plane. This
+  assumes a colour-independent PSF shape.
 
 ## Development
 
@@ -701,7 +787,7 @@ src/astroidentify/
 1. **Image ingestion and preprocessing** (done)
 2. **Source/star detection** (done)
 3. **Astrometric plate solving / WCS** (done; needs local Astrometry.net + index data)
-4. **Catalogue matching** (done: Gaia DR3)
+4. **Catalogue matching** (done: Gaia DR3; 4.1 saturated-star astrometric centroids)
 5. Annotation and identification
 6. Evidence/confidence estimation
 7. CV/ML verification

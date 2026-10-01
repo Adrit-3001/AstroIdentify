@@ -10,8 +10,9 @@ Development is milestone-based. Every milestone must leave the repository in a w
 
 1. ✅ Image ingestion and preprocessing
 2. ✅ Astronomical source/star detection
-3. ✅ Blind astrometric plate solving / WCS
-4. 🚧 Catalogue matching
+3. ✅ Astrometric plate solving / WCS
+4. ✅ Gaia DR3 catalogue matching
+4.1. 🚧 Saturated-star centroid calibration
 5. ⬜ Object annotation and identification
 6. ⬜ Evidence/confidence estimation
 7. ⬜ Computer-vision / ML verification
@@ -19,7 +20,258 @@ Development is milestone-based. Every milestone must leave the repository in a w
 9. ⬜ FastAPI backend
 10. ⬜ Web frontend and deployment
 
-The current focus is **Milestone 4 only: Catalogue Matching**.
+The current focus is **Milestone 4.1 only**.
+
+Do not begin Milestone 5 until Milestone 4.1 is complete.
+
+---
+
+## Add this completed Milestone 4 section
+
+### Milestone 4 — Gaia DR3 Catalogue Matching
+
+Completed and stable, subject only to the Milestone 4.1 upstream centroid correction.
+
+The catalogue pipeline now:
+
+- accepts the solved WCS from Milestone 3;
+- derives a query region from the image footprint;
+- queries Gaia DR3 locally through the implemented TAP client;
+- filters returned catalogue sources to the actual image footprint;
+- optionally propagates proper motion when an observation epoch is available;
+- refines the astrometric solution against Gaia using isolated unsaturated stars;
+- matches Gaia stars to accepted image detections one-to-one;
+- records angular and pixel residuals;
+- writes structured catalogue-query, match and refinement artifacts;
+- generates a catalogue-match overlay;
+- keeps the original blind `solution.wcs` untouched and stores the catalogue-refined solution separately as `refined_solution.wcs`;
+- does not use target names, filename semantics or manually supplied target coordinates.
+
+The real Unistellar benchmark produced:
+
+- 643 accepted detections;
+- 614 one-to-one Gaia DR3 matches;
+- 95.5% of accepted detections matched;
+- median residual about 0.668 arcsec;
+- RMS residual about 0.982 arcsec;
+- maximum accepted residual about 2.966 arcsec;
+- a live Gaia query returning 22,477 rows;
+- 13,170 Gaia sources projected inside the image;
+- 1,929 catalogue stars eligible for matching.
+
+Milestone 4 does **not** identify named astronomical objects.
+
+Do not redesign the Milestone 4 query or matching architecture unless a verified defect requires it.
+
+---
+
+## Add this section after the completed milestones
+
+# Milestone 4.1 — Saturated-Star Centroid Calibration
+
+## Purpose
+
+Milestone 4.1 is a focused corrective sub-milestone.
+
+The purpose is to improve the astrometric centroid of bright saturated stars produced by Milestone 2 so that:
+
+1. Milestone 3's blind plate solution is not systematically shifted by biased saturated-star centroids;
+2. bright Gaia stars can be matched more reliably;
+3. Milestone 4's Gaia WCS refinement becomes a small astrometric refinement rather than compensation for a several-arcsecond upstream systematic offset.
+
+This is **not** a redesign of Milestone 2.
+
+This is **not** object identification.
+
+This is **not** Milestone 5.
+
+---
+
+## Observed issue
+
+The current benchmark shows a real upstream astrometric defect:
+
+- Milestone 3's WCS is fitted primarily from bright saturated stars;
+- the saturated stars in the Unistellar image have large/clipped, asymmetric or comet-shaped cores;
+- the current saturated-core centroid can differ from the astrometric centre by several pixels;
+- this creates an approximately several-arcsecond systematic offset for ordinary unsaturated stars;
+- Gaia refinement in Milestone 4 removes that shift successfully;
+- the original blind WCS remains scientifically valid as a plate solution, but its astrometric zero point is unnecessarily biased by saturated-star centroiding.
+
+The evidence indicates centroid bias changes with saturated-core morphology/size.
+
+Do not treat this as a WCS projection, coordinate-origin, Gaia-catalogue, filename, index-coverage or plate-solver problem unless new evidence contradicts the previous diagnostics.
+
+---
+
+## Scope
+
+Milestone 4.1 may modify only what is required for saturated-star centroid measurement and its direct consumers.
+
+Likely affected areas:
+
+```text
+src/astroidentify/detection/
+src/astroidentify/astrometry/
+tests/detection/
+tests/astrometry/
+tests/catalogs/
+```
+
+Milestone 1 image ingestion should remain unchanged.
+
+Milestone 4 catalogue querying/matching should remain architecturally unchanged unless a small compatibility adjustment is required.
+
+Do not implement named-object catalogues, annotation, confidence scoring, ML, Solar System support, APIs or frontend work.
+
+---
+
+## Scientific requirement
+
+For saturated stars, the centroid estimator should estimate the star's **astrometric centre**, not merely the geometric centre of the clipped plateau.
+
+Candidate approaches may include, but are not limited to:
+
+- centroiding on unsaturated wings only;
+- masking saturated pixels and fitting the surrounding PSF;
+- robust 2-D Gaussian fitting outside the saturated core;
+- robust Moffat-like fitting where justified;
+- symmetry-based wing centroiding;
+- radial/annular weighting around the saturated region;
+- another simple deterministic method supported by evidence.
+
+Do not select a method because it looks sophisticated.
+
+Select it because it improves held-out astrometric residuals without degrading unsaturated-source behaviour.
+
+Do not add a neural network.
+
+---
+
+## Preserve canonical coordinates
+
+AstroIdentify's canonical pixel convention remains:
+
+```text
+x increases left -> right
+y increases top -> bottom
+0-based pixel centres
+integer coordinates refer to pixel centres
+```
+
+Do not introduce flips or origin changes.
+
+If a new centroid is added, it must be expressed in this same canonical system.
+
+---
+
+## Source model
+
+Preserve the existing detection identity and provenance.
+
+If practical, retain both:
+
+- the original measured/core centroid;
+- the astrometry-preferred centroid.
+
+Do not silently overwrite useful diagnostics if preserving both is inexpensive.
+
+A useful model may conceptually expose:
+
+```text
+x
+y
+astrometric_x
+astrometric_y
+centroid_method
+centroid_quality
+```
+
+The exact API should fit the existing codebase.
+
+For unsaturated stars, the astrometric centroid should remain equivalent to the existing trusted centroid unless evidence supports a change.
+
+---
+
+## Calibration and evaluation
+
+Gaia may be used as a scientific reference for **evaluation and calibration experiments**, but production Milestone 2 detection must not require network access or Gaia.
+
+Do not tune and evaluate on the exact same stars without a held-out test.
+
+Use a deterministic split or another defensible held-out procedure.
+
+At minimum compare:
+
+1. current centroid vs Gaia;
+2. proposed saturated centroid vs Gaia;
+3. unsaturated-star residual before vs after;
+4. Milestone 3 blind WCS before vs after;
+5. Milestone 4 residual before vs after refinement.
+
+The final production centroid algorithm must operate from the image and local detection data alone.
+
+---
+
+## Required benchmark measurements
+
+For the M57 benchmark, record before/after values for:
+
+- number of saturated accepted detections;
+- number for which a refined saturated centroid can be computed;
+- saturated-star median Gaia residual;
+- saturated-star RMS Gaia residual;
+- unsaturated-star median Gaia residual;
+- unsaturated-star RMS Gaia residual;
+- Milestone 3 blind WCS centre shift relative to the Gaia-refined reference;
+- Milestone 3 plate-solver match count;
+- Milestone 3 plate-solver residuals;
+- Milestone 4 match count;
+- Milestone 4 pre-refinement residual;
+- Milestone 4 post-refinement residual.
+
+Do not claim improvement from one metric alone.
+
+---
+
+## Acceptance criteria
+
+Milestone 4.1 is complete only if all of the following are true:
+
+1. the selected centroid method is target-agnostic and deterministic;
+2. saturated-star astrometric residual improves materially on held-out data;
+3. unsaturated-star astrometry does not materially regress;
+4. Milestone 3 still solves fully blind with no target name or sky-position hint;
+5. the Milestone 3 systematic astrometric offset is substantially reduced;
+6. Milestone 4 still produces a valid Gaia match set;
+7. `solution.wcs` remains the independent plate-solver output;
+8. `refined_solution.wcs` remains a separate Gaia-refined product;
+9. ordinary tests do not require internet access;
+10. all existing tests remain green;
+11. new regression tests cover the discovered saturated-centroid bias;
+12. ruff lint and format checks pass.
+
+If no simple local centroid method improves the held-out residual reliably, document that result and preserve the current implementation rather than overfitting the benchmark.
+
+---
+
+## Milestone 4.1 Definition of Done
+
+Before Milestone 5 begins:
+
+- the saturated-centroid problem has been measured;
+- at least several candidate methods have been compared;
+- the chosen method is evidence-backed;
+- production code has been changed only where justified;
+- the blind M57 plate solve has been rerun;
+- the Gaia catalogue matching benchmark has been rerun;
+- before/after metrics are recorded;
+- tests and lint are clean;
+- no named-object identification has been implemented.
+
+Stop there.
+
+The next milestone will be Milestone 5 — Object Annotation and Identification.
 
 ---
 

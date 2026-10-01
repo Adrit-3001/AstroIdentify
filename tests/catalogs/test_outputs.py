@@ -119,3 +119,16 @@ def test_overlay_alignment(run) -> None:
         coloured_near(match.observed_x_px, match.observed_y_px, RESIDUAL_COLOR)
         or match.residual_px < 0.1
     )
+
+
+def test_refined_wcs_is_a_readable_fits_file(run) -> None:
+    """Regression: the refined WCS must be valid FITS (it lacked SIMPLE before)."""
+    from astroidentify.astrometry.wcs import describe_wcs, load_wcs
+
+    result, paths = run
+    wcs, header = load_wcs(paths.refined_wcs)
+    assert header["SIMPLE"] is True and header["IMAGEW"] == W and header["IMAGEH"] == H
+    reloaded = describe_wcs(wcs, W, H).centre
+    expected = describe_wcs(result.wcs_used, W, H).centre
+    assert reloaded.ra_deg == pytest.approx(expected.ra_deg, abs=1e-9)
+    assert reloaded.dec_deg == pytest.approx(expected.dec_deg, abs=1e-9)

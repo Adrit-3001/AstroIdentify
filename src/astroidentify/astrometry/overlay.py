@@ -67,7 +67,7 @@ def render_selection_overlay(
 
     radius = max(6.0, 0.8 * detection.aperture_radius)
     for source in detection.accepted_sources:
-        _circle(draw, source.x, source.y, radius * 0.6, DETECTION_COLOR, line)
+        _circle(draw, *source.astrometric_xy, radius * 0.6, DETECTION_COLOR, line)
     for selected in selection.sources:
         _circle(draw, selected.x, selected.y, radius, TIER_COLORS[selected.tier], line + 1)
     for selected in sorted(selection.sources, key=lambda s: s.rank)[:max_labels]:

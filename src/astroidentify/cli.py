@@ -570,6 +570,7 @@ def format_detection_summary(
         f"Rejected: {d['n_rejected']} ({reasons})",
         f"Saturated: {d['n_saturated']} ({d['n_saturated_accepted']} accepted)",
         f"Edge flagged: {d['n_edge_flagged']} ({d['n_edge_flagged_accepted']} accepted)",
+        _astrometric_line(d.get("astrometric_centroid")),
         f"Median SNR (accepted): {median_snr:.3g}" if median_snr is not None else "Median SNR: n/a",
         f"Median FWHM (accepted, effective): {median_fwhm:.3g} px"
         if median_fwhm is not None
@@ -619,3 +620,17 @@ def format_summary(input_path: Path, result: PreprocessingResult, paths: OutputP
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _astrometric_line(summary: dict | None) -> str:
+    """One-line summary of the saturated-star astrometric centroids."""
+    if not summary or not summary.get("enabled"):
+        return "Astrometric centroids: detection centroids (calibration disabled)"
+    counts = summary["accepted_by_method"]
+    line = (
+        f"Astrometric centroids: {counts['isophote_calibrated']} saturated cores calibrated, "
+        f"{counts['saturated_core_fallback']} fallback"
+    )
+    if summary.get("median_correction_px") is not None:
+        line += f" (median shift {summary['median_correction_px']:.2f} px)"
+    return line
