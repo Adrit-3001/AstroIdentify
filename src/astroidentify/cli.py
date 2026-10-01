@@ -11,7 +11,16 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from astroidentify import __version__
-from astroidentify.config import PREVIEW_STRETCHES, DetectionConfig, PreprocessingConfig
+from astroidentify.astrometry.outputs import AstrometryOutputPaths, save_astrometry_outputs
+from astroidentify.astrometry.pipeline import plate_solve
+from astroidentify.astrometry.types import PlateSolution
+from astroidentify.astrometry.wcs import format_dec, format_ra
+from astroidentify.config import (
+    PREVIEW_STRETCHES,
+    AstrometryConfig,
+    DetectionConfig,
+    PreprocessingConfig,
+)
 from astroidentify.detection.outputs import DetectionOutputPaths, save_detection_outputs
 from astroidentify.detection.pipeline import detect_sources
 from astroidentify.detection.types import DetectionResult
@@ -31,7 +40,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="astroidentify",
         description="AstroIdentify astronomical image analysis "
-        "(Milestone 1: preprocessing, Milestone 2: source detection).",
+        "(Milestone 1: preprocessing, Milestone 2: source detection, "
+        "Milestone 3: blind plate solving).",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -127,7 +137,97 @@ def build_parser() -> argparse.ArgumentParser:
         help="pixel value treated as saturated (default: from image metadata)",
     )
     _add_verbose(det)
+
+    astro_defaults = AstrometryConfig()
+    solve = commands.add_parser(
+        "solve",
+        help="blindly plate-solve an image (WCS) from its detected stars",
+        description="Preprocess, detect stars and blindly determine where the image points "
+        "on the sky with a local Astrometry.net installation. No sky position or object name "
+        "is used. This does not identify objects.",
+    )
+    solve.add_argument("input", type=Path, help="image file (JPEG, PNG or FITS)")
+    solve.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="output directory (default: outputs/<image name>-astrometry)",
+    )
+    solve.add_argument("--hdu", type=int, default=None, help="FITS HDU index to use")
+    solve.add_argument(
+        "--max-sources",
+        type=int,
+        default=astro_defaults.max_sources,
+        help="sources in the first selection (default: %(default)s)",
+    )
+    solve.add_argument(
+        "--min-sources",
+        type=int,
+        default=astro_defaults.min_sources,
+        help="minimum usable sources (default: %(default)s)",
+    )
+    solve.add_argument(
+        "--grid",
+        type=_grid_shape,
+        default=None,
+        metavar="COLSxROWS",
+        help="spatial balancing grid, e.g. 5x3 (default: about 16 cells, image aspect)",
+    )
+    solve.add_argument(
+        "--exclude-saturated",
+        action="store_true",
+        help="never send saturated sources to the solver (default: rank them by brightness "
+        "with the others, since index stars are the brightest stars)",
+    )
+    solve.add_argument("--solve-field", help="path to solve-field (default: search PATH)")
+    solve.add_argument("--astrometry-config", help="Astrometry.net engine config file")
+    solve.add_argument(
+        "--index-dir",
+        action="append",
+        default=[],
+        help="directory of Astrometry.net index files (repeatable; overrides the config)",
+    )
+    solve.add_argument(
+        "--timeout",
+        type=float,
+        default=astro_defaults.timeout_seconds,
+        help="wall-clock limit per solver attempt in seconds (default: %(default)s)",
+    )
+    solve.add_argument(
+        "--total-timeout",
+        type=float,
+        default=astro_defaults.total_timeout_seconds,
+        help="wall-clock budget for all attempts together in seconds (default: %(default)s)",
+    )
+    solve.add_argument(
+        "--cpulimit",
+        type=float,
+        default=astro_defaults.cpulimit_seconds,
+        help="solver CPU-time limit in seconds (default: %(default)s)",
+    )
+    solve.add_argument(
+        "--scale-low",
+        type=float,
+        default=None,
+        help="camera-derived lower pixel scale (arcsec/px); runs a scale-constrained attempt first",
+    )
+    solve.add_argument(
+        "--scale-high",
+        type=float,
+        default=None,
+        help="camera-derived upper pixel scale (arcsec/px); runs a scale-constrained attempt first",
+    )
+    solve.add_argument("--keep-temp", action="store_true", help="keep the solver working directory")
+    _add_verbose(solve)
     return parser
+
+
+def _grid_shape(text: str) -> tuple[int, int]:
+    try:
+        columns, rows = (int(v) for v in text.lower().split("x"))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected COLSxROWS, e.g. 5x3, got {text!r}") from exc
+    return columns, rows
 
 
 def _add_verbose(parser: argparse.ArgumentParser) -> None:
@@ -146,6 +246,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     configure_logging(args.verbose)
     if args.command == "detect":
         return _run_detect(args)
+    if args.command == "solve":
+        return _run_solve(args)
     return _run_preprocess(args)
 
 
@@ -206,6 +308,93 @@ def _run_detect(args: argparse.Namespace) -> int:
 
     print(format_detection_summary(args.input, result, paths))
     return EXIT_OK
+
+
+def _run_solve(args: argparse.Namespace) -> int:
+    try:
+        preprocessing_config = PreprocessingConfig(fits_hdu=args.hdu)
+        config = AstrometryConfig(
+            max_sources=args.max_sources,
+            expanded_max_sources=max(args.max_sources, AstrometryConfig().expanded_max_sources),
+            min_sources=args.min_sources,
+            grid_shape=args.grid,
+            include_saturated=not args.exclude_saturated,
+            solve_field_path=args.solve_field,
+            astrometry_config=args.astrometry_config,
+            index_dirs=tuple(args.index_dir),
+            timeout_seconds=args.timeout,
+            total_timeout_seconds=args.total_timeout,
+            cpulimit_seconds=args.cpulimit,
+            scale_low_arcsec=args.scale_low,
+            scale_high_arcsec=args.scale_high,
+            keep_temp=args.keep_temp,
+        )
+    except ConfigurationError as exc:
+        _error(exc)
+        return EXIT_USAGE
+
+    output_dir = args.output
+    if output_dir is None:
+        base = default_output_dir(args.input)
+        output_dir = base.with_name(f"{base.name}-astrometry")
+    try:
+        detection = detect_sources(preprocess_image(args.input, preprocessing_config))
+        solution = plate_solve(detection, config, work_dir=Path(output_dir) / "solver_work")
+        paths = save_astrometry_outputs(solution, detection, output_dir, config)
+    except AstroIdentifyError as exc:
+        _error(exc)
+        return EXIT_ERROR
+
+    print(format_solve_summary(solution, paths))
+    if not solution.solved:
+        _error(f"plate solving {solution.status.replace('_', ' ')}: {solution.error}")
+        return EXIT_ERROR
+    return EXIT_OK
+
+
+def format_solve_summary(solution: PlateSolution, paths: AstrometryOutputPaths) -> str:
+    """Concise plate-solving summary (never includes object names)."""
+    selection = solution.selection
+    stats = solution.match_statistics
+    lines = [
+        f"Solved: {'yes' if solution.solved else 'no'} ({solution.status})",
+        f"Backend: {solution.backend}"
+        + (f" {solution.backend_version}" if solution.backend_version else ""),
+        f"Selected sources: {len(selection) if selection is not None else 0}",
+    ]
+    attempts = ", ".join(f"{a.number}:{a.name}={_attempt_state(a)}" for a in solution.attempts)
+    lines.append(f"Attempts: {attempts or 'none (solver not run)'}")
+    if solution.solved and solution.geometry is not None:
+        g = solution.geometry
+        lines += [
+            f"Matched sources: {stats.n_matched if stats else 'n/a'}",
+            f"Centre RA: {g.centre.ra_deg:.6f} deg ({format_ra(g.centre.ra_deg)})",
+            f"Centre Dec: {g.centre.dec_deg:+.6f} deg ({format_dec(g.centre.dec_deg)})",
+            f"Pixel scale: {g.pixel_scale_arcsec:.4f} arcsec/pixel",
+            f"Field: {g.field_width_deg * 60:.2f}' x {g.field_height_deg * 60:.2f}'",
+            f"Orientation: up is {g.up_position_angle_deg:.2f} deg E of N; parity {g.parity}",
+        ]
+        if stats is not None and stats.median_residual_arcsec is not None:
+            lines.append(
+                f'Residual: median {stats.median_residual_arcsec:.3f}", '
+                f'RMS {stats.rms_residual_arcsec:.3f}", max {stats.max_residual_arcsec:.3f}"'
+            )
+        else:
+            lines.append("Residual: n/a (no correspondence output)")
+    lines += [
+        f"Runtime: {solution.runtime_seconds:.1f} s",
+        f"Mode: {solution.mode or 'n/a'}",
+        f"WCS: {paths.wcs or 'not written (unsolved)'}",
+        f"Overlay: {paths.wcs_overlay or paths.selection_overlay}",
+        f"Solution: {paths.plate_solution}",
+        f"Solver log: {paths.solver_log}",
+    ]
+    return "\n".join(lines)
+
+
+def _attempt_state(attempt) -> str:
+    runtime = f" {attempt.runtime_seconds:.1f}s" if attempt.runtime_seconds is not None else ""
+    return f"{attempt.status}{runtime}"
 
 
 def format_detection_summary(

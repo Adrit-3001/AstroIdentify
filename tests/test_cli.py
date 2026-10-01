@@ -184,3 +184,60 @@ def test_detect_invalid_configuration(tmp_path: Path, capsys: pytest.CaptureFixt
     image = _star_field_png(tmp_path / "field.png")
     assert main(["detect", str(image), "--detection-sigma", "-1"]) == EXIT_USAGE
     assert "detection_sigma" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- solve
+
+
+def test_solve_success(tmp_path: Path, fake_solver, index_dir, capsys) -> None:
+    image = _star_field_png(tmp_path / "field.png")
+    out = tmp_path / "astro"
+    args = ["solve", str(image), "-o", str(out), "--solve-field", str(fake_solver())]
+    assert main([*args, "--index-dir", str(index_dir), "--max-sources", "15"]) == EXIT_OK
+    stdout = capsys.readouterr().out
+    labels = (
+        "Solved: yes", "Backend: Astrometry.net", "Selected sources:", "Matched sources: 12",
+        "Centre RA:", "Centre Dec:", "Pixel scale:", "Field:", "Orientation:", "Residual:",
+        "Runtime:", "Mode: blind", "WCS:", "Overlay:",
+    )  # fmt: skip
+    for label in labels:
+        assert label in stdout, label
+    assert {p.name for p in out.iterdir()} >= {
+        "selected_sources.csv", "selected_sources.json", "source_selection.png", "solution.wcs",
+        "plate_solution.json", "wcs_overlay.png", "solver.log", "correspondences.csv",
+    }  # fmt: skip
+    assert not (out / "solver_work").exists()
+
+
+def test_solve_missing_solver(tmp_path: Path, capsys) -> None:
+    image = _star_field_png(tmp_path / "field.png")
+    out = tmp_path / "astro"
+    code = main(["solve", str(image), "-o", str(out), "--solve-field", str(tmp_path / "nope")])
+    assert code == EXIT_ERROR
+    captured = capsys.readouterr()
+    assert "Solved: no (prerequisites_missing)" in captured.out
+    assert "prerequisites missing" in captured.err
+    assert (out / "source_selection.png").is_file() and not (out / "solution.wcs").exists()
+
+
+def test_solve_unsolved_exit_code(tmp_path: Path, fake_solver, index_dir, capsys) -> None:
+    image = _star_field_png(tmp_path / "field.png")
+    args = [
+        "solve",
+        str(image),
+        "-o",
+        str(tmp_path / "a"),
+        "--solve-field",
+        str(fake_solver("unsolved")),
+    ]
+    assert main([*args, "--index-dir", str(index_dir)]) == EXIT_ERROR
+    assert "Solved: no (unsolved)" in capsys.readouterr().out
+
+
+def test_solve_usage_errors(tmp_path: Path, capsys) -> None:
+    image = _star_field_png(tmp_path / "field.png")
+    assert main(["solve", str(image), "--scale-low", "1.0"]) == EXIT_USAGE
+    assert "scale_low_arcsec" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as excinfo:
+        main(["solve", str(image), "--grid", "banana"])
+    assert excinfo.value.code == EXIT_USAGE

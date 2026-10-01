@@ -4,12 +4,12 @@ AstroIdentify aims to take an astronomical image with little or no context, work
 the sky it points, identify catalogued objects in the field, annotate the image and explain how
 confident it is in each identification.
 
-The project is built in milestones. **Milestones 1 (image ingestion and preprocessing) and 2
-(stellar source detection) are implemented.** AstroIdentify does **not** yet identify celestial
-objects: it finds and measures point-source candidates, but it does not know where the image
-points or what any source is. Plate solving (astrometry/WCS), catalogue queries, object
-identification, ML verification, an API and a web frontend are deliberately left to future
-milestones.
+The project is built in milestones. **Milestones 1 (preprocessing), 2 (stellar source
+detection) and 3 (blind plate solving) are implemented.** With a local Astrometry.net
+installation and index data, AstroIdentify can determine where an unknown image points on the
+sky (a WCS) from its detected stars alone. It does **not** yet know *what* is in the image:
+catalogue queries, object identification, ML verification, an API and a web frontend are
+deliberately left to future milestones.
 
 ## Milestone 1: what it does
 
@@ -306,11 +306,207 @@ All values live in `DetectionConfig` (`src/astroidentify/config.py`) with docume
 - **Blends.** Close doubles within 2.5 FWHM are reported as one source.
 
 
+## Milestone 3: blind plate solving (WCS)
+
+**Plate solving** finds the mapping between image pixels and sky coordinates (a *World
+Coordinate System*, WCS) by recognising the geometric pattern of the detected stars. AstroIdentify
+solves **blind**: the solver receives only star pixel positions, their brightness ranking and the
+image size. No RA/Dec hint, object name, filename or target label is ever passed; the command
+builder refuses position flags. The result says where the image points, not what is in it.
+
+```bash
+astroidentify solve data/raw/M57__Ring_Nebula-eQuinox-20260925-003755.png \
+    --output outputs/m57-astrometry
+```
+
+The command reuses the Milestone 1 and 2 pipelines (preprocess, then detect), then selects
+sources, writes the source list, runs `solve-field` and parses the WCS. The real Unistellar
+benchmark solves **fully blind** (no position, no scale hint; the filename is never read):
+
+```text
+Solved: yes (solved)
+Backend: Astrometry.net 0.93
+Selected sources: 100
+Attempts: 1:bright=solved 2.7s
+Matched sources: 25
+Centre RA: 283.386456 deg (18h53m32.75s)
+Centre Dec: +33.027044 deg (+33d01m37.4s)
+Pixel scale: 0.8570 arcsec/pixel
+Field: 36.57' x 27.42'
+Orientation: up is 33.63 deg E of N; parity normal
+Residual: median 1.220", RMS 2.007", max 4.181"
+Runtime: 2.7 s
+Mode: blind
+```
+
+AstroIdentify can determine the celestial coordinates of an unknown astronomical image. It
+still does **not** know what objects are in it: catalogue lookup and identification are later
+milestones.
+
+### Prerequisite: Astrometry.net and index data
+
+AstroIdentify calls a **local** `solve-field` through a controlled subprocess. It never uses the
+astrometry.net web service and never downloads index data by itself. Two things are needed:
+
+1. **The solver:** `sudo apt install astrometry.net` (Debian/Ubuntu; other platforms: build from
+   https://github.com/dstndstn/astrometry.net).
+2. **Index files** matching your field of view. Index files are pre-computed star-pattern
+   catalogues; each covers a range of pattern ("quad") sizes, which should span roughly 10–100%
+   of the image width. For typical small-telescope fields of about 20′–60′:
+
+   ```bash
+   sudo apt install astrometry-data-tycho2        # bright stars, all scales, ~284 MB
+   sudo apt install astrometry-data-2mass-06 astrometry-data-2mass-07 \
+                    astrometry-data-2mass-08-19   # deeper, quads >= 16', ~624 MB (downloaded at install)
+   ```
+
+   Narrower fields need smaller-scale sets (e.g. `astrometry-data-2mass-05`, 11′–16′, 629 MB).
+   The packages install into `/usr/share/astrometry`, which `/etc/astrometry.cfg` already lists.
+
+Index files can also live anywhere: `--index-dir DIR` (repeatable) makes AstroIdentify generate
+a solver config listing only those directories, and `--astrometry-config FILE` uses your own
+config. If the solver or index files are missing, `solve` still writes the source selection,
+then exits with status 1 and names the missing prerequisite.
+
+### Source selection
+
+The solver gets a deterministic, quality-aware and spatially balanced subset of the accepted
+Milestone 2 sources, not simply the brightest N:
+
+- **Tiers**: `preferred` (unsaturated, not edge-flagged, DAOFIND centroid), `secondary`
+  (unsaturated, peak-search centroid), `saturated` (core-centroided) and `edge`.
+- **Tier modes**: `pooled` (allowed tiers compete on brightness) or `sequential` (better tiers
+  used up first).
+- **Why saturated stars come first by default.** Astrometry.net index files hold the
+  *brightest* stars of each sky region, and blind matching pairs the brightest field stars
+  with them. In processed consumer images those stars are saturated. On the M57 benchmark
+  all 25 index stars in the field were among the 37 brightest detections and all saturated.
+  An unsaturated-only list did not solve even when the sky position was given; the pooled
+  list solved blind in under 3 s. Saturated-core centroids are good to about 1–2 px, which is
+  enough for matching.
+- **Brightness** order: flux, then SNR, then position (for ties).
+- **Spatial balancing:** a grid of about 16 cells shaped to the image aspect (5×3 for 4:3
+  images). Sources are taken round-robin, the brightest remaining per cell per round, so the
+  list cannot collapse onto the brightest or densest part of the frame.
+- The list is sent **sorted by flux** (rank 1 = brightest), as blind solvers expect.
+
+### Attempt sequence and scheduling (bounded, deterministic)
+
+0. `scale_bounds` *(only if `--scale-low/--scale-high` are given, and then first)*: the
+   `bright` set with that pixel-scale range (arcsec/pixel, from your telescope/camera, never
+   from the target); recorded as `scale-constrained`. Blind attempts follow if it fails;
+1. `bright`: unsaturated + saturated non-edge sources, pooled by brightness, grid-balanced (100);
+2. `unsaturated`: unsaturated non-edge sources only (100), for images whose saturated
+   centroids are unreliable;
+3. `expanded`: all tiers including edge sources, pooled (200).
+
+Each attempt gets at most `--timeout` seconds (default 300) and the whole sequence at most
+`--total-timeout` (default 900). A timeout or solver error ends only that attempt; the next one
+still runs while budget remains. Attempts with an identical source set are skipped. Each
+attempt records its own `status` (`solved`, `unsolved`, `timeout`, `solver_error`,
+`invalid_wcs`, `skipped`, `budget_exhausted`), runtime, timeout and exact command in
+`plate_solution.json`, and its full output in `solver.log`. `--exclude-saturated` keeps
+saturated stars out of every attempt.
+
+### Coordinate conventions
+
+- Canonical AstroIdentify coordinates are unchanged: 0-based array x/y, pixel centres at
+  integers, row 0 at the top.
+- Astrometry.net source lists use FITS 1-based coordinates. The conversion
+  (`solver = canonical + 1`) lives in exactly one function
+  (`astroidentify.astrometry.xylist`). It was verified against Astrometry.net 0.93 itself: its
+  own extractor reports a star at array column 30, row 20 as (31, 21), and solved synthetic
+  fields map canonical coordinates to the true sky positions with 0.000″ error.
+- WCS files use FITS 1-based `CRPIX`. AstroIdentify always calls Astropy with `origin=0` and
+  canonical coordinates (`astrometry.wcs.pixel_to_sky/sky_to_pixel`, including SIP
+  distortion), so no manual ±1 appears anywhere else.
+- `parity` is `normal` when the image, displayed with row 0 at the top, shows the sky as seen
+  from the ground (east 90° counter-clockwise from north), else `mirrored`.
+  `up_position_angle_deg` is the position angle (east of north) of the displayed up direction.
+  The solver's own values (whose "up" is FITS +y, i.e. down the display) are kept verbatim
+  under `solver_report`.
+
+### Outputs
+
+```text
+outputs/<name>-astrometry/
+    selected_sources.csv / .json   the solver source set (canonical coordinates, rank, tier, grid cell)
+    source_selection.png           selected sources by tier over all accepted detections, plus the grid
+    plate_solution.json            status, mode, constraints, centre, corners, scale, field size,
+                                   orientation, parity, match statistics, attempts, runtime
+    solver.log                     exact commands, exit status and solver output of every attempt
+    solution.wcs                   FITS WCS header (TAN-SIP), only if solved
+    wcs_overlay.png                RA/Dec grid, centre marker and coordinates, selected and
+                                   solver-matched stars, only if solved
+    correspondences.csv            solver-matched stars: pixel/sky positions and residuals
+```
+
+Match evidence is raw: matched-star count, median, RMS and maximum residual (arcsec and px),
+the match fraction, and the solver's own log-odds and verification counts. No percentage
+"confidence" is computed. Temporary solver files are removed unless `--keep-temp` is given.
+
+### Failure modes
+
+| Status | Meaning | Exit code |
+| --- | --- | --- |
+| `solved` | valid WCS | 0 |
+| `unsolved` | the attempts ran normally and none matched (try more index scales or scale bounds) | 1 |
+| `prerequisites_missing` | `solve-field` or index files not found (message says which) | 1 |
+| `timeout` | at least one attempt hit its time limit and none solved (more time may help) | 1 |
+| `solver_error` | every attempt that ran failed inside `solve-field` (see `solver.log`) | 1 |
+| `invalid_wcs` | the solver claimed success but its WCS is missing or malformed | 1 |
+
+The overall status is the most informative attempt outcome (`invalid_wcs`, then `timeout`, then
+`unsolved`, then `solver_error`); per-attempt statuses are always recorded.
+
+Too few usable sources (fewer than `--min-sources`, default 10) is reported as an error before
+any solver run. Invalid options exit with status 2.
+
+### Python API
+
+```python
+from astroidentify import preprocess_image
+from astroidentify.astrometry import plate_solve, save_astrometry_outputs
+from astroidentify.config import AstrometryConfig
+from astroidentify.detection import detect_sources
+
+detection = detect_sources(preprocess_image("data/raw/field.png"))
+solution = plate_solve(detection, AstrometryConfig())
+solution.raise_for_status()                      # domain exception unless solved
+solution.geometry.centre                         # SkyPosition(ra_deg, dec_deg)
+solution.wcs                                     # astropy.wcs.WCS (use origin=0)
+save_astrometry_outputs(solution, detection, "outputs/field-astrometry")
+```
+
+### Known limitations (Milestone 3)
+
+- A local Astrometry.net installation and index data are required; nothing is downloaded
+  automatically.
+- The solve can only succeed at scales covered by the installed index files.
+- Correspondences, residuals and verification counts come from Astrometry.net's own match
+  (`--corr`/`--match`). Independent catalogue cross-matching is a later milestone.
+- Distortion is modelled by the solver's SIP polynomial (default order 2). On the benchmark
+  the SIP correction is about 1.7″ at the corners and residuals show no strong field
+  dependence, so no extra distortion model is used.
+- Residuals (median about 1.2″) are dominated by saturated-core centroid scatter, because the
+  index stars are the saturated ones.
+- A fully blind search over all installed index scales is slow when the field's index stars
+  are not in the list; camera-derived `--scale-low/--scale-high` bounds speed solving up a lot.
+- Debugging tools for this milestone live in `scripts/m57_astrometry_diagnostics.py`
+  (non-production; its known-position runs use a diagnostic-only oracle).
+- Object identification is **not** implemented: the WCS says where the image points, not what
+  is in it.
+
+
 ## Development
 
 ```bash
-pytest                       # run the test suite
+pytest                       # run the test suite (no Astrometry.net needed)
 ruff check . && ruff format --check .
+
+# Optional: end-to-end test against a real Astrometry.net (builds a synthetic index itself)
+ASTROIDENTIFY_SOLVE_FIELD=$(which solve-field) \
+ASTROIDENTIFY_BUILD_INDEX=$(which build-astrometry-index) pytest -m integration
 ```
 
 Tests generate synthetic star fields with fixed seeds, so they need no data files. Put your
@@ -318,12 +514,12 @@ own images in `data/raw/` (git-ignored); generated results go in `outputs/` (git
 
 ```text
 src/astroidentify/
-    config.py          PreprocessingConfig, DetectionConfig (all tunable values, validated)
+    config.py          Preprocessing/Detection/AstrometryConfig (all tunable values, validated)
     exceptions.py      domain-specific errors
     types.py           AstronomyImage, PreprocessingResult, BackgroundEstimate, ...
     logging.py         CLI logging setup (library code only logs, never prints)
     serialization.py   shared JSON/array/output-directory helpers
-    cli.py             `astroidentify preprocess ...` / `astroidentify detect ...`
+    cli.py             `astroidentify preprocess | detect | solve ...`
     preprocessing/
         loader.py      JPEG/PNG/FITS -> AstronomyImage (the only format-specific code)
         background.py  background level, noise, pixel-to-pixel noise
@@ -342,13 +538,23 @@ src/astroidentify/
         outputs.py     sources.csv/json, detection_metadata.json, maps
         pipeline.py    detect_sources() / detect_image()
         types.py       Source, DetectionResult, coordinate convention
+    astrometry/
+        selection.py   quality tiers + grid-balanced source selection
+        xylist.py      XYLS writer and the single canonical <-> solver pixel conversion
+        solver.py      local solve-field boundary (prerequisites, command, subprocess)
+        wcs.py         WCS loading, pixel <-> sky (origin 0), centre/corners/scale/orientation
+        diagnostics.py correspondences, residuals, solver match statistics
+        overlay.py     source_selection.png and wcs_overlay.png
+        outputs.py     artifacts and plate_solution.json
+        pipeline.py    plate_solve(): deterministic attempt sequence
+        types.py       SourceSelection, PlateSolution, WcsGeometry, ...
 ```
 
 ## Roadmap
 
 1. **Image ingestion and preprocessing** (done)
 2. **Source/star detection** (done)
-3. Astrometric plate solving / WCS
+3. **Astrometric plate solving / WCS** (implemented; needs local Astrometry.net + index data)
 4. Catalogue matching (Gaia, SIMBAD)
 5. Annotation and identification
 6. Evidence/confidence estimation

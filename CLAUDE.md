@@ -4,13 +4,13 @@
 
 AstroIdentify is an extensible astronomy/computer-vision project that will eventually accept an astronomical image with little or no user-provided context, determine where in the sky the image was taken, identify catalogued objects in the field, annotate the image, and provide interpretable evidence/confidence for its identifications.
 
-The project must be developed incrementally. Each milestone should produce a working, testable system and should not prematurely implement later milestones.
+Development is milestone-based. Each milestone must leave the repository in a working, tested state and must not prematurely implement later milestones.
 
 ### Development roadmap
 
 1. ✅ Image ingestion and preprocessing
-2. 🚧 Astronomical source/star detection
-3. ⬜ Astrometric plate solving / WCS
+2. ✅ Astronomical source/star detection
+3. 🚧 Astrometric plate solving / WCS
 4. ⬜ Catalogue matching
 5. ⬜ Object annotation and identification
 6. ⬜ Evidence/confidence estimation
@@ -19,7 +19,7 @@ The project must be developed incrementally. Each milestone should produce a wor
 9. ⬜ FastAPI backend
 10. ⬜ Web frontend and deployment
 
-The current focus is **Milestone 2 only**.
+The current focus is **Milestone 3 only**.
 
 ---
 
@@ -27,7 +27,7 @@ The current focus is **Milestone 2 only**.
 
 ### Milestone 1 — Image Ingestion and Preprocessing
 
-Completed.
+Completed and stable.
 
 The existing pipeline supports:
 
@@ -35,11 +35,9 @@ The existing pipeline supports:
 - PNG
 - FITS
 - grayscale and RGB inputs
-- float32 internal image representation
+- float32 scientific image representation
 - FITS metadata preservation
-- robust global background estimation
-- robust global noise estimation
-- per-channel diagnostics
+- global and per-channel background/noise diagnostics
 - neighboring-pixel/difference-noise diagnostics
 - percentile normalization without mandatory clipping
 - preview generation
@@ -47,682 +45,758 @@ The existing pipeline supports:
 - CLI usage
 - automated tests
 
-Milestone 1 behavior should remain backward-compatible unless a verified defect requires a change.
+Do not redesign Milestone 1 unless a verified defect blocks current work.
 
-The existing preprocessing pipeline is considered stable. Do not redesign it unless a concrete bug blocks the current milestone.
+### Milestone 2 — Astronomical Source / Star Detection
+
+Completed and stable.
+
+The existing detection pipeline provides:
+
+- 2-D detection-plane construction
+- spatial background and RMS estimation
+- DAOStarFinder-based stellar candidate detection
+- FWHM estimation
+- supplementary recovery of broad/bright sources
+- source centroid and brightness measurements
+- correlated-noise-aware SNR diagnostics
+- saturation handling and saturated-core merging
+- edge flags
+- explainable filtering with rejection reasons
+- machine-readable source CSV/JSON
+- coordinate-exact detection overlay
+- local background/RMS artifacts
+- CLI usage
+- automated tests
+
+The real Unistellar M57 benchmark produced:
+
+- 2,464 candidates
+- 643 accepted sources
+- 1,821 rejected candidates
+- 129 saturated candidates
+- 116 accepted saturated sources
+- median accepted SNR ≈ 15.6
+- estimated field FWHM ≈ 9.29 px
+- local background median ≈ 9.53
+- local RMS median ≈ 3.78
+
+Milestone 2 behavior should remain backward-compatible unless a verified defect requires change.
 
 ---
 
-## 3. Current Milestone: Milestone 2 — Astronomical Source / Star Detection
+## 3. Current Milestone: Milestone 3 — Blind Astrometric Plate Solving / WCS
 
-The objective is to take the output of the Milestone 1 preprocessing pipeline and identify reliable astronomical source/star candidates for future astrometric plate solving.
+The objective is to determine **where an arbitrary astronomical image is on the celestial sphere** using the stellar source positions produced by Milestone 2.
 
-Milestone 2 should:
+The system must not be told the target name or expected coordinates.
 
-1. Create a consistent 2-D detection plane from grayscale or RGB inputs.
-2. Estimate spatial/local background and background RMS.
-3. Subtract the local background for detection purposes.
-4. Detect likely stellar sources using established astronomical algorithms.
-5. Measure accurate pixel centroids.
-6. Measure brightness and useful source-shape information.
-7. Estimate source SNR where meaningful.
-8. Flag saturated sources.
-9. Flag edge sources and other potentially unreliable candidates.
-10. Apply conservative, explainable filtering.
-11. Export machine-readable source measurements.
-12. Generate diagnostic overlays showing accepted and rejected candidates.
-13. Preserve exact coordinate correspondence with the original image.
-14. Produce output suitable for the future plate-solving milestone.
+For the benchmark image, the filename contains `M57`; this must never be used as a hint. Treat the image as an unknown star field.
+
+Milestone 3 should:
+
+1. Select a high-quality, spatially distributed subset of accepted stellar detections.
+2. Convert that subset into a plate-solver-compatible source list.
+3. Integrate a mature astrometric solver, preferably local Astrometry.net `solve-field`.
+4. Produce a valid WCS solution when solving succeeds.
+5. Parse and expose:
+   - image centre RA/Dec;
+   - celestial coordinates of image corners;
+   - pixel scale;
+   - field of view;
+   - orientation/rotation;
+   - parity if available;
+   - solver runtime and status;
+   - match/residual quality information where available.
+6. Preserve exact pixel-coordinate conventions from Milestone 2.
+7. Save the WCS and structured plate-solution metadata.
+8. Generate visual diagnostics that demonstrate the WCS is attached to the image.
+9. Fail clearly when the solver, required index data, or a valid solution is unavailable.
+10. Keep plate-solving logic isolated so another backend could be added later without rewriting the rest of the pipeline.
 
 Do **not** implement:
 
-- astrometric plate solving;
-- WCS solving;
-- Gaia or SIMBAD catalogue queries;
-- astronomical object identification;
-- Ring Nebula / M57 recognition;
-- ML or neural-network classification;
+- Gaia queries;
+- SIMBAD queries;
+- object-name lookup;
+- identification of M57 or any other object;
+- catalogue annotation;
+- object confidence scoring;
+- ML or neural networks;
 - Solar System ephemerides;
 - FastAPI;
-- frontend/web development;
+- frontend/web work;
 - deployment.
 
-Design for future milestones, but stop after source detection.
+Stop after a verified WCS solution.
 
 ---
 
 ## 4. Engineering Principles
 
-### Modularity
+### Library first, CLI second
 
-Keep astronomy logic separated by responsibility.
+Core functionality belongs in importable Python modules.
 
-Prefer small modules with explicit interfaces over large scripts.
+CLI commands must call library APIs rather than contain plate-solving logic.
 
-The project should continue toward a structure such as:
+Conceptually:
+
+```python
+selection = select_plate_sources(detection_result, config)
+solution = solve_astrometry(selection, image_shape, config)
+```
+
+### Preserve existing contracts
+
+Milestones 1 and 2 are stable dependencies.
+
+Do not duplicate preprocessing or detection.
+
+Do not independently redetect stars inside the astrometry module unless an explicitly documented fallback is later approved.
+
+### Blind solving first
+
+The primary benchmark must not use:
+
+- object names;
+- known target coordinates;
+- coordinates inferred from filenames;
+- manually entered M57 coordinates;
+- target labels;
+- a human-selected “this is Lyra/M57” hint.
+
+Generic solver configuration such as image dimensions and source flux ranking is allowed.
+
+If an image-scale/FOV bound is later used as a fallback, it must be generic telescope/camera information rather than target information, and the metadata must record that the solve was scale-constrained rather than fully blind.
+
+### Reproducibility
+
+Source selection, solver command construction, and metadata generation must be deterministic for the same input/configuration.
+
+### Type safety
+
+Use typed public interfaces and dataclasses where appropriate.
+
+### Error handling
+
+Use clear domain-specific failures for:
+
+- no accepted sources;
+- too few usable sources;
+- plate solver executable unavailable;
+- Astrometry.net index data unavailable/misconfigured;
+- solver timeout;
+- solver process failure;
+- solver returns unsolved;
+- malformed/missing WCS output;
+- invalid WCS transform.
+
+Do not silently fall back to fabricated coordinates.
+
+### Logging
+
+Library code uses logging, not direct printing.
+
+The CLI may print concise user-facing status.
+
+### Avoid unnecessary abstraction
+
+A small backend boundary around the external plate solver is appropriate.
+
+Do not create a general plugin framework, web service layer, database, distributed job queue, or ML infrastructure.
+
+---
+
+## 5. Recommended Package Structure
+
+Continue toward a structure such as:
 
 ```text
 src/astroidentify/
     preprocessing/       # Milestone 1 — stable
-    detection/           # Milestone 2 — current
-    astrometry/          # future
+    detection/           # Milestone 2 — stable
+    astrometry/          # Milestone 3 — current
+        __init__.py
+        selection.py
+        xylist.py
+        solver.py
+        wcs.py
+        diagnostics.py
+        outputs.py
+        pipeline.py
+        types.py
     catalogs/            # future
     annotation/          # future
     confidence/          # future
     models/              # future
 ```
 
-Only `detection/` should receive substantial new functionality during Milestone 2.
-
-### Library first, CLI second
-
-Core functionality belongs in importable Python modules.
-
-CLI commands should call library functions instead of containing business logic.
-
-Bad:
-
-```python
-# CLI contains detection implementation
-```
-
-Good:
-
-```python
-result = detect_sources(preprocessing_result, config)
-```
-
-and the CLI simply exposes that functionality.
-
-### No premature ML
-
-Do not use neural networks where established astronomical/image-processing methods are sufficient.
-
-Milestone 2 requires no ML.
-
-### Preserve scientific information
-
-Detection should operate on scientifically meaningful array data, not on cosmetically stretched previews.
-
-A display overlay may use contrast stretching for visualization, but measurements must come from the aligned scientific data.
-
-### Reproducibility
-
-Processing should be deterministic unless randomness is explicitly required.
-
-Configuration values must be explicit and testable.
-
-### Type safety
-
-Use Python type hints throughout public interfaces.
-
-Prefer `pathlib.Path` over raw path strings internally.
-
-### Error handling
-
-Fail with clear domain-specific errors.
-
-Examples:
-
-- invalid detection-plane dimensions
-- unsupported source array shape
-- local background estimation failure
-- invalid detection configuration
-- output path failure
-
-Do not silently swallow errors.
-
-### Logging
-
-Use Python's `logging` module.
-
-Library code must not print directly to stdout.
-
-CLI code may display concise user-facing summaries.
-
-### Avoid unnecessary abstraction
-
-Build interfaces that support future milestones, but do not construct unused plugin systems, dependency-injection frameworks, databases, cloud services, web infrastructure, or ML frameworks.
+Adjust this only where the existing architecture justifies a cleaner organization.
 
 ---
 
-## 5. Python and Dependencies
+## 6. Plate-Solving Backend
 
-Target modern Python, preferably Python 3.11+.
+Prefer local **Astrometry.net** `solve-field`.
 
-Current scientific dependencies may include:
+Why:
 
-- numpy
-- astropy
-- Pillow
-- photutils
-- matplotlib where justified
+- it is a mature blind astrometric solver;
+- it can solve from source lists rather than requiring AstroIdentify to re-detect stars;
+- it produces standard WCS output;
+- it fits the project's goal of explainable astronomy tooling.
 
-Development dependencies include:
-
-- pytest
-- ruff
-
-Do not introduce PyTorch, TensorFlow, scikit-learn, web frameworks, databases, or frontend dependencies during Milestone 2.
-
-Do not add OpenCV unless there is a concrete technical reason.
-
----
-
-## 6. Milestone 1 Input Contract
-
-Milestone 2 must consume the existing Milestone 1 preprocessing result instead of independently reloading or reinterpreting source files.
-
-The preprocessing result already provides:
-
-- original image metadata
-- original dimensions
-- float32 scientific array
-- normalized array
-- valid-pixel mask information
-- background diagnostics
-- per-channel diagnostics
-- source metadata
-- normalization parameters
-
-Milestone 2 should build on this output cleanly.
-
-Avoid duplicate image loading or duplicate preprocessing logic.
-
----
-
-## 7. Detection Plane
-
-JPEG/PNG inputs may be RGB while FITS images may be grayscale.
-
-Create a clearly documented 2-D `detection_plane`.
-
-For grayscale:
-
-```text
-2-D scientific image
-    ↓
-detection plane
-```
-
-For RGB:
-
-```text
-RGB scientific image
-    ↓
-documented channel combination
-    ↓
-2-D detection plane
-```
-
-A channel mean or justified luminance-style combination is acceptable initially.
+The implementation should call the local solver through a controlled subprocess boundary.
 
 Requirements:
 
-- preserve the original RGB data;
-- do not mutate Milestone 1 arrays;
-- isolate detection-plane generation in its own module/function;
-- document the exact combination rule;
-- keep the implementation easy to replace later;
-- output a finite 2-D floating-point array.
+- detect whether `solve-field` is available;
+- construct arguments safely without shell-string interpolation;
+- enforce a configurable timeout;
+- capture stdout/stderr;
+- preserve useful solver logs in diagnostics;
+- use a temporary/work directory rather than cluttering the repository;
+- clean temporary files unless configured to keep them for debugging;
+- detect solved/unsolved status from actual solver outputs, not from string guessing alone.
 
-Do not implement complex colour science unless necessary.
+Do not auto-download large Astrometry.net index datasets without explicit user action.
 
----
+If index files are missing, fail clearly and document exactly what the user must install/configure.
 
-## 8. Local Background and Noise Estimation
-
-Milestone 1 intentionally computes global diagnostics, but real telescope images can contain gradients, dense stars, nebulosity, and spatially varying background.
-
-Milestone 2 must introduce spatial/local background estimation.
-
-`photutils.background.Background2D` is a strong default candidate.
-
-A reasonable implementation may use:
-
-- `Background2D`
-- `SigmaClip`
-- `MedianBackground`
-- a robust RMS estimator
-
-The result should conceptually expose:
-
-```python
-background_map
-background_rms_map
-background_subtracted
-```
-
-Requirements:
-
-- configurable box/tile size;
-- sensible defaults;
-- configurable interpolation/filter behavior where justified;
-- finite outputs;
-- graceful handling of small images;
-- no hard-coded tuning specific to a single benchmark image.
-
-The local background model should be visualizable for debugging.
-
-Do not use the Milestone 1 global scalar background/noise as the sole detection threshold.
+Do not silently switch to a public web API.
 
 ---
 
-## 9. Source Detection
+## 7. Source Selection for Plate Solving
 
-Use a mature astronomical source-detection technique.
+Do not blindly send the brightest N accepted detections.
 
-`photutils.detection.DAOStarFinder` is an appropriate default unless there is a concrete reason to choose another method.
+The M57 benchmark contains many saturated stars and some edge/distorted sources.
 
-Detection should operate on the local-background-subtracted detection plane.
+Create a deterministic plate-solving selection policy that prefers:
 
-Expose important detector parameters through configuration, including at minimum concepts equivalent to:
+- accepted sources;
+- non-edge sources;
+- unsaturated sources when sufficient;
+- reasonable source shape;
+- reliable centroid;
+- high SNR/brightness;
+- broad spatial coverage across the image.
 
-- detection sigma
-- expected FWHM
+Saturated sources may remain available as fallback geometry because their centroids can still be useful.
 
-Choose sensible defaults, but do not bury unexplained magic numbers in implementation code.
+The selection algorithm should avoid concentrating all selected stars in the brightest/densest portion of the frame.
 
-The detector should aim to:
+A grid-based or other simple spatial-balancing strategy is acceptable.
 
-- recover faint but usable stars;
-- avoid large numbers of noise detections;
-- tolerate some elongation and non-ideal source shapes;
-- work on real consumer-telescope imagery;
-- produce coordinates suitable for future plate solving.
+Expose useful configuration such as:
 
----
+- target/max number of selected sources;
+- grid dimensions or coverage policy;
+- whether saturated sources are allowed as fallback;
+- minimum selected-source count.
 
-## 10. Source Measurement Contract
-
-Each detected candidate should expose stable machine-readable measurements such as:
-
-- source ID
-- x centroid
-- y centroid
-- peak value
-- flux or comparable brightness measure
-- SNR where meaningful
-- FWHM estimate where available
-- sharpness
-- roundness / ellipticity where available
-- local background
-- local noise
-- saturation flag
-- edge flag
-- accepted/rejected state
-- rejection reasons
-
-Do not invent measurements that are not scientifically meaningful.
-
-Future code should be able to obtain a brightness-ranked source list without reprocessing the image.
+Persist the selected source set as an artifact for debugging.
 
 ---
 
-## 11. Coordinate Convention
+## 8. Astrometry.net Source List / XYLS Contract
 
-Coordinate consistency is critical for future WCS and annotation work.
+Prefer passing Milestone 2 detections to Astrometry.net as a source list rather than asking Astrometry.net to independently detect sources from the raster image.
 
-Use and document:
+Create an XYLS/FITS-table writer or another officially supported source-list representation.
+
+The source list should contain at minimum:
+
+- x coordinate;
+- y coordinate;
+- brightness/flux suitable for ranking.
+
+Important:
+
+- verify Astrometry.net's coordinate convention from the installed/documented interface;
+- isolate any 0-based ↔ 1-based conversion in exactly one well-tested location;
+- store AstroIdentify's canonical coordinates unchanged in its own artifacts;
+- preserve image width and height;
+- verify that the output source ordering is the intended brightness/quality ordering.
+
+Do not guess the external solver's coordinate convention.
+
+---
+
+## 9. WCS Result Contract
+
+A successful solution should expose a typed result containing at least:
+
+- solved: bool
+- solver backend/name/version if available
+- centre RA in degrees
+- centre Dec in degrees
+- image corner celestial coordinates
+- pixel scale in arcsec/pixel
+- field width/height in degrees or arcminutes
+- orientation/rotation in degrees
+- parity/handedness if available
+- WCS header / serialized WCS artifact path
+- selected-source count
+- matched-source count if available
+- residual/RMS quality information if available
+- runtime
+- whether solving was fully blind or constrained
+- any scale/position constraints used
+- warnings
+
+If a value cannot be reliably derived, use `null`/optional fields rather than inventing it.
+
+---
+
+## 10. WCS Coordinate Convention
+
+AstroIdentify's canonical pixel convention remains:
 
 ```text
-origin: image array
 x increases left → right
 y increases top → bottom
-row zero is displayed at top
+origin corresponds to the image array
+integer pixel coordinates refer to pixel centres
 ```
 
-No hidden image flipping, resizing, or cropping may occur between measurement and annotation unless an explicit tested transform is stored.
+Astropy WCS APIs may use an explicit origin parameter.
 
-The diagnostic overlay must remain pixel-aligned with source coordinates.
+All conversions between AstroIdentify pixel coordinates, FITS conventions, Astropy WCS conventions, and Astrometry.net inputs must be centralized and tested.
+
+Do not allow hidden flips or off-by-one shifts.
 
 ---
 
-## 12. Saturated and Edge Sources
+## 11. WCS Diagnostics
 
-Bright stars may contain saturated pixels.
+Generate diagnostics sufficient to inspect whether the solution is plausible without doing catalogue identification.
 
-Saturated stars should:
+Useful diagnostics may include:
 
-- be detected when possible;
-- be flagged as saturated;
-- not automatically be discarded solely because of saturation.
+- a coordinate-grid overlay on the original image;
+- labelled RA/Dec grid lines;
+- image centre marker and centre coordinates;
+- corner coordinates;
+- selected plate-solving sources;
+- matched plate-solving sources if Astrometry.net correspondence output is available.
 
-Use source metadata / nominal maximum where available rather than assuming every image saturates at 255.
+The diagnostic overlay must preserve pixel alignment.
 
-Edge sources should also be flagged when their measurements may be unreliable.
-
-Filtering should remain conservative because plate solving benefits from retaining many genuine stars.
+Do not annotate object names.
 
 ---
 
-## 13. Accepted vs Rejected Candidates
+## 12. Match / Residual Quality
 
-Filtering must be a distinct, explainable step.
+If Astrometry.net can emit correspondence/match information for the solved field, parse it.
 
-Each rejected source should retain one or more reasons such as:
+Prefer objective diagnostics such as:
 
-```json
-{
-  "accepted": false,
-  "rejection_reasons": [
-    "low_snr",
-    "too_close_to_edge"
-  ]
-}
-```
+- number of matched stars;
+- median or RMS positional residual;
+- maximum residual;
+- fraction of selected stars participating in the match, where meaningful.
 
-Do not make filtering opaque.
+Do not invent a percentage “confidence” in this milestone.
 
-Initially prefer conservative thresholds over aggressive pruning.
+A later milestone will handle calibrated confidence/evidence.
 
-The goal is not a perfectly clean scientific source catalogue. The goal is a robust set of positional stellar candidates for future plate solving.
+For now report raw solution-quality measurements.
+
+---
+
+## 13. Solver Fallback Strategy
+
+The default attempt should be blind and source-list based.
+
+A reasonable deterministic fallback sequence may be:
+
+1. preferred unsaturated/non-edge spatially distributed source subset;
+2. larger source subset;
+3. allow suitable saturated sources;
+4. optional generic image-scale/FOV bounds if configured from telescope/camera information.
+
+Do not use target coordinates or object identity as fallback hints.
+
+Record every attempted configuration and which attempt solved the field.
+
+Avoid uncontrolled repeated solver calls.
 
 ---
 
 ## 14. Benchmark Image
 
-Use the real Unistellar observation already present in the repository as the primary Milestone 2 integration benchmark:
+Use the existing real Unistellar image as the primary integration benchmark:
 
 ```text
 data/raw/M57__Ring_Nebula-eQuinox-20260925-003755.png
 ```
 
-Its Milestone 1 metadata showed approximately:
+Its filename reveals the target, but the solver pipeline must ignore that semantic information.
 
-```text
-Dimensions: 2560 × 1920
-Format: PNG
-Channels: 3
-Background level: 9.333
-Global noise sigma: 3.954
-Difference/pixel-to-pixel noise sigma: 1.048
-R background: 8
-G background: 8
-B background: 12
-Background rejected fraction: ~7.3%
-Fraction at minimum: ~2.35%
-Fraction at maximum: ~0.12%
-```
+The authoritative Milestone 2 outputs should be used, including the accepted source catalogue and detection metadata.
 
-Important diagnostic:
+For the blind benchmark:
 
-```text
-global noise sigma is much larger than pixel-to-pixel noise,
-indicating large-scale background structure
-```
+- no RA/Dec hint;
+- no object-name hint;
+- no manually supplied M57 location;
+- no filename parsing.
 
-This benchmark demonstrates why local background estimation is required.
+The success condition is a valid WCS solution produced from image geometry/source detections.
 
-Do not optimize specifically for this image.
-
-Do not identify or special-case M57.
-
-The central nebula is not the detection target. The surrounding stellar field is.
+Do not begin catalogue matching after the solve.
 
 ---
 
 ## 15. Output Artifacts
 
-A successful detection run should produce machine-readable source results and visual diagnostics.
-
-A reasonable output structure is:
+A successful astrometry run should produce artifacts similar to:
 
 ```text
-outputs/<name>/
-    sources.csv
-    sources.json
-    detection_metadata.json
-    detected_sources.png
-    background_map.npy
-    background_rms.npy
+outputs/<name>-astrometry/
+    selected_sources.csv
+    selected_sources.json
+    source_selection.png
+    solution.wcs
+    plate_solution.json
+    wcs_overlay.png
+    solver.log
+    correspondences.csv      # if available
 ```
 
-The exact structure may evolve if the existing artifact system suggests a cleaner design.
+The exact structure may differ if the existing artifact system suggests something cleaner.
 
-Do not duplicate large arrays unnecessarily.
-
-The detection metadata should include:
-
-- detector configuration;
-- number of raw candidates;
-- number accepted;
-- number rejected;
-- number saturated;
-- number edge-flagged;
-- summary SNR statistics;
-- summary FWHM statistics where meaningful;
-- background-map statistics;
-- RMS-map statistics;
-- warnings.
+Do not expose temporary Astrometry.net implementation files as public API unless useful for debugging.
 
 ---
 
-## 16. Diagnostic Overlay
+## 16. CLI
 
-Generate an image overlay aligned exactly with the source image.
-
-It should visually distinguish:
-
-- accepted sources;
-- rejected candidates;
-- saturated sources;
-- optionally edge-flagged sources;
-- optionally source IDs.
-
-The overlay is a debugging and evaluation artifact.
-
-It should make obvious whether:
-
-- real stars are being found;
-- noise is being falsely accepted;
-- saturated stars are handled;
-- edge/distorted stars are retained appropriately;
-- extended objects are causing inappropriate detections.
-
-Do not resize/crop in a way that breaks coordinates unless an explicit transform is stored and tested.
-
----
-
-## 17. CLI
-
-Extend the CLI with a detection command conceptually similar to:
+Add a command conceptually similar to:
 
 ```bash
-astroidentify detect \
+astroidentify solve \
     data/raw/M57__Ring_Nebula-eQuinox-20260925-003755.png \
-    --output outputs/m57-detection
+    --output outputs/m57-astrometry
 ```
 
-It may internally invoke preprocessing if that fits the current architecture.
+It may run preprocessing and detection internally if needed by the current CLI architecture, but it must reuse those library pipelines and contracts.
 
-The command should print a concise summary such as:
+The CLI should print a concise result such as:
 
 ```text
-Input: ...
-Candidates: ...
-Accepted: ...
-Rejected: ...
-Saturated: ...
-Edge flagged: ...
-Median SNR: ...
-Median FWHM: ...
+Solved: yes
+Backend: Astrometry.net
+Selected sources: ...
+Matched sources: ...
+Centre RA: ...
+Centre Dec: ...
+Pixel scale: ... arcsec/pixel
+Field of view: ... × ...
+Orientation: ...
+Residual: ...
+Runtime: ...
+WCS: ...
 Overlay: ...
-Sources: ...
 ```
 
-Do not dump full source arrays to stdout.
+Do not print object names.
 
 ---
 
-## 18. Tests
+## 17. Tests
 
-Milestone 2 is not complete without automated tests.
+All Milestone 1 and Milestone 2 tests must continue to pass.
 
-All Milestone 1 tests must continue to pass.
+Add deterministic Milestone 3 tests.
 
-Add deterministic tests for:
-
-### Detection plane
-
-- grayscale input
-- RGB input
-- correct 2-D shape
-- finite output
-- no mutation of source arrays
-
-### Background model
-
-Use synthetic images with:
-
-- flat constant background
-- known gradient
-- known noise
-- injected bright stars
-
-Verify the recovered background is reasonably close to synthetic truth.
-
-### Detection
-
-Use synthetic star fields with known positions.
+### Source selection
 
 Test:
 
-- isolated Gaussian stars
-- stars of different brightness
-- noisy background
-- stars near edges
-- saturated star
-- slightly elongated star where practical
+- only accepted sources are used by default;
+- edge sources are deprioritized/excluded as configured;
+- unsaturated sources are preferred;
+- fallback can include saturated sources;
+- selection is brightness/quality aware;
+- selection is spatially distributed;
+- selection is deterministic;
+- insufficient-source behavior is clear.
 
-Verify coordinate recovery within a reasonable tolerance.
-
-### Filtering
+### XYLS/source-list export
 
 Test:
 
-- low-SNR candidate
-- edge candidate
-- saturation flag
-- accepted/rejected reasons
+- correct image dimensions;
+- correct x/y columns;
+- correct brightness ordering;
+- external coordinate-convention conversion;
+- no mutation of canonical source coordinates.
+
+### Solver subprocess boundary
+
+Do not require real Astrometry.net indexes for the normal unit-test suite.
+
+Use a fake/stub executable or mocked subprocess results to test:
+
+- command construction;
+- timeout;
+- process failure;
+- unsolved result;
+- solved result;
+- missing output files;
+- log capture.
+
+### WCS parsing
+
+Use synthetic known WCS headers to test:
+
+- centre world coordinates;
+- corner coordinates;
+- pixel scale;
+- FOV;
+- orientation where derivable;
+- pixel → sky → pixel round trips;
+- explicit origin behavior;
+- absence/malformed WCS errors.
 
 ### Outputs
 
 Test:
 
-- JSON serialization
-- CSV output
-- diagnostic overlay
-- coordinate preservation
+- plate-solution JSON serialization;
+- selected-source exports;
+- overlay coordinate alignment;
+- solver-log persistence.
 
 ### CLI
 
-Test success and expected failure behavior.
-
-Do not write brittle tests that depend on exact source counts across dependency versions unless scientifically justified.
+Test success and failure behavior without depending on a network service.
 
 ---
 
-## 19. Real-Image Evaluation Requirement
+## 18. Integration Test with Real Astrometry.net
 
-After unit tests pass, run the full Milestone 2 pipeline on the M57 Unistellar image.
+The ordinary unit-test suite must not require external index data.
 
-Inspect the overlay visually.
+However, Milestone 3 is not complete until a separate real integration run is attempted on the M57 benchmark using an actual Astrometry.net installation.
 
-Do not merely report that the command completed.
+Before the integration run:
 
-Explicitly evaluate:
+1. check whether `solve-field` is installed;
+2. identify whether usable index data is configured;
+3. if either is missing, report the exact missing prerequisite and installation/configuration steps;
+4. do not claim Milestone 3 is end-to-end complete until the real solve succeeds.
 
-- whether obvious stars are detected;
-- whether large amounts of background noise are falsely detected;
-- whether saturated stars are handled;
-- whether edge/distorted stars remain useful;
-- whether the central Ring Nebula creates false stellar detections;
-- whether the local background map appears sensible.
-
-If the overlay reveals obvious problems, adjust general-purpose detection logic/configuration and re-run.
-
-Do not overfit to the M57 image.
+If prerequisites are available, perform the blind solve and inspect the resulting WCS diagnostics.
 
 ---
 
-## 20. Future Plate-Solving Compatibility
+## 19. Documentation
 
-The next milestone will consume source geometry and brightness.
+Update the README with:
 
-Future code should be able to do something equivalent to:
+- Milestone 3 purpose;
+- Astrometry.net prerequisite;
+- index-data requirement;
+- exact solver command;
+- explanation of blind solving;
+- explanation of source selection;
+- output artifacts;
+- WCS fields;
+- failure modes;
+- statement that object identification/catalogue lookup is intentionally not implemented yet.
 
-```python
-sources = detection_result.accepted_sources
+Do not claim AstroIdentify knows what object is in the image.
 
-plate_solver_input = [
-    (source.x, source.y, source.flux)
-    for source in sources
-]
-```
-
-Coordinate quality and brightness ranking are more important during Milestone 2 than detailed astrophysical classification.
-
-Do **not** implement plate solving yet.
+At this stage it only knows where the image points on the sky.
 
 ---
 
-## 21. Coding Style
+## 20. Coding Style
 
 - Write readable Python over clever Python.
 - Keep functions focused.
 - Prefer descriptive names.
 - Avoid giant classes.
 - Avoid deep inheritance.
-- Document non-obvious astronomy/math decisions.
+- Document non-obvious astrometric/FITS coordinate decisions.
 - Keep configuration centralized.
-- Keep constants out of implementation code where they may need tuning.
-- Avoid duplicate conversion/detection logic.
-- Use comments to explain *why*, not restate *what* the code says.
+- Use comments to explain *why*.
+- Never hide coordinate-origin conversion in unrelated code.
 
 ---
 
-## 22. How to Work on Tasks
+## 21. How to Work on Tasks
 
-When implementing a task:
+When implementing Milestone 3:
 
-1. Inspect the existing repository first.
-2. Preserve functioning Milestone 1 code unless a verified defect requires change.
-3. State assumptions when an implementation choice materially affects behavior.
-4. Implement the smallest coherent solution.
-5. Add/update tests with the implementation.
-6. Run relevant tests.
-7. Fix regressions before stopping.
-8. Update README when user-facing usage changes.
-9. Run the real M57 benchmark.
-10. Inspect the resulting diagnostic overlay.
-11. Summarize exactly what changed and any remaining limitations.
+1. Inspect the existing repository and current Milestone 1/2 APIs.
+2. Inspect the real M57 detection artifacts.
+3. Check local Astrometry.net availability and configuration.
+4. Design the smallest clean astrometry package.
+5. Implement and test source selection.
+6. Implement and test source-list export.
+7. Implement the local solver boundary.
+8. Implement WCS parsing and diagnostics.
+9. Run the full existing test suite.
+10. Run lint/format checks.
+11. Attempt the real blind M57 integration solve.
+12. Inspect the WCS diagnostic output.
+13. Report prerequisites accurately if the real solve cannot run.
+14. Stop before catalogue lookup or object identification.
 
-Do not claim tests passed unless they were actually run successfully.
+Do not claim a real solve succeeded unless it actually did.
 
 ---
 
-## 23. Current Definition of Done
+## 22. Current Definition of Done
 
-Milestone 2 is complete when:
+Milestone 3 is complete when:
 
-1. all Milestone 1 tests still pass;
-2. grayscale and RGB inputs produce a documented 2-D detection plane;
-3. a spatial background map is calculated;
-4. a spatial background RMS/noise map is calculated;
-5. stellar source candidates are detected;
-6. accurate source centroids are exported;
-7. useful brightness measurements are exported;
-8. saturated sources are flagged;
-9. edge/unreliable sources can be flagged;
-10. filtering decisions are explainable;
-11. accepted and rejected sources are exported in machine-readable form;
-12. an aligned diagnostic source overlay is generated;
-13. synthetic source-detection tests pass;
-14. the real Unistellar M57 image has been processed and visually inspected;
+1. all Milestone 1 and 2 tests still pass;
+2. quality-ranked spatially distributed source selection is implemented;
+3. selected sources can be exported in a verified solver-compatible format;
+4. Astrometry.net integration is implemented through a controlled local subprocess;
+5. missing solver/index prerequisites fail clearly;
+6. solved/unsolved/timeout/process-failure states are handled;
+7. WCS output is parsed into structured metadata;
+8. pixel/world coordinate conventions are tested;
+9. centre coordinates, corners, pixel scale, FOV, and orientation are reported where derivable;
+10. match/residual diagnostics are parsed when available;
+11. selected-source and WCS diagnostic overlays are generated;
+12. the normal test suite does not require network access or Astrometry.net index data;
+13. a real blind integration solve on the Unistellar benchmark succeeds;
+14. the benchmark solve uses no target name or target-coordinate hint;
 15. lint/format checks pass;
-16. no plate solving, catalogue matching, object recognition, ML, or web functionality has been implemented.
+16. no catalogue matching, object identification, ML, or web functionality has been implemented.
+
+If the only blocker is missing local Astrometry.net/index prerequisites, implement and test the software boundary but explicitly report Milestone 3 as **integration-blocked**, not complete.
 
 Stop there.
 
-The next milestone will use the detected stellar coordinates for astrometric plate solving.
+The next milestone will use the WCS to query astronomical catalogues and determine what known objects are present in the field.
+
+Milestone 3 Status
+Milestone 3 remains in progress. The software boundary, WCS parser, source-list writer, source-selection logic, CLI, and tests exist, but the real Unistellar benchmark has not yet produced a valid WCS solution. Do not begin Milestone 4.
+The current task is a focused Milestone 3 integration-debugging subphase, not a new milestone.
+Observed Real-Benchmark Failures
+Benchmark image:
+data/raw/M57__Ring_Nebula-eQuinox-20260925-003755.png
+Observed results so far:
+1. AstroIdentify XYLS, 100 preferred sources, Tycho-2 only, fully blind: timed out at 600 s.
+2. AstroIdentify XYLS after installing 2MASS 06, 07 and 08-19, fully blind: timed out at 600 s. Logs confirm 2MASS indexes were searched.
+3. Direct AstroIdentify XYLS solve with camera scale 0.5–1.2 arcsec/pixel and no position hint: did not solve.
+4. Direct raw-PNG solve with Astrometry.net native extraction and camera scale 0.5–1.2 arcsec/pixel: simplexy found 16,479 sources and still did not solve within the test budget.
+5. Direct AstroIdentify XYLS solve with camera scale 0.75–0.95 arcsec/pixel: processed the full 100-source input and did not solve. A weak false hypothesis near 0.937 arcsec/pixel was rejected; no WCS was written.
+These failures mean the problem must now be diagnosed systematically rather than by installing random additional indexes or simply extending blind timeouts.
+Temporary Diagnostic Exception: Known Sky Position
+The production AstroIdentify solver must remain blind to sky position.
+However, during this debugging subphase only, a known approximate sky position may be supplied to raw solve-field diagnostic commands or isolated diagnostic scripts to determine why the production blind solve fails.
+For the M57 benchmark, use only as a diagnostic oracle:
+RA ≈ 283.396 degrees
+Dec ≈ +33.029 degrees
+Requirements:
+- do not add this position to default configuration;
+- do not parse it from the filename;
+- do not store it as production benchmark input;
+- do not expose a target-name-based solve path in the product;
+- do not call a position-constrained diagnostic a Milestone 3 success;
+- final Milestone 3 completion still requires solving without a sky-position hint.
+Interpretation:
+known-position solve succeeds
+    -> image/index/source geometry can be solved;
+       investigate blind search, ranking, source subset, scale or timeout strategy
+
+known-position solve fails
+    -> investigate source coordinates, image transformation/distortion,
+       index compatibility, source extraction or scale assumptions
+Debugging Rules
+- Do not make broad code changes until a controlled experiment identifies the failure mode.
+- Change one variable at a time.
+- Do not hard-code M57-specific behavior.
+- Keep diagnostic target knowledge outside the production solver path.
+- Do not call an online plate-solving API unless explicitly requested by the user.
+Required Diagnostic Matrix
+A. Verify environment
+Record:
+- solve-field path/version;
+- Astrometry.net config used;
+- installed index families/scales;
+- exact indexes attempted.
+Do not add more index packages unless evidence shows a missing scale.
+B. Known-position raster diagnostic
+Run Astrometry.net directly on the original PNG using the diagnostic-only RA/Dec, a generous radius, and a broad plausible camera scale such as 0.3–2.5 arcsec/pixel.
+Answer:
+- does the raster solve when the sky region is known?
+- if yes, what is the actual pixel scale, FOV, orientation, parity and residual quality?
+- does the solved scale agree with prior assumptions?
+C. Known-position AstroIdentify XYLS diagnostics
+Using the same diagnostic position, compare at minimum:
+- current spatially balanced 100;
+- top 100 accepted by brightness without spatial balancing;
+- top 200 accepted;
+- top 400 accepted where feasible;
+- a variant that includes suitable saturated stars;
+- high-SNR ordering if materially different from flux ordering.
+Preserve exact source IDs and XYLS for each run.
+D. Coordinate-convention diagnostic
+If the raster solves but XYLS fails, explicitly verify the real-binary coordinate transform.
+AstroIdentify canonical coordinates are:
+x increases left -> right
+y increases top -> bottom
+0-based pixel centres
+Do not assume the existing +1 mapping is correct merely because synthetic tests passed. Verify X origin, Y origin, Y direction, image-height conversion and parity/reflection with controlled real-binary diagnostics. Temporary flipped XYLS variants are allowed for diagnosis only.
+E. Source-ranking diagnostic
+Compare:
+- current spatially balanced order;
+- pure flux order;
+- high-SNR order;
+- inclusion/exclusion of saturated stars;
+- larger source counts.
+Revise production selection only if evidence shows a general advantage.
+F. Scale diagnostic
+If any position-constrained diagnostic solves, use the WCS-derived scale as the authoritative empirical scale for this processed export. Record pixel scale and FOV, and compare against 0.5–1.2 and 0.75–0.95.
+G. Distortion/processed-image diagnostic
+If raster and XYLS behave differently, investigate resampling, stacking, digital upscaling, nonlinear warping, edge-dependent centroid shifts and relevant Astrometry.net SIP/tweak behavior. Do not add distortion fitting without evidence.
+Solver Scheduling Requirement
+The current attempt strategy must not allow attempt 1 to consume the entire pipeline budget and prevent later attempts from running.
+After root cause is understood, implement:
+- separate per-attempt and total solve budgets;
+- timeout of one attempt proceeds to the next appropriate fallback;
+- scale-constrained attempt runs early when the user explicitly supplies scale bounds;
+- metadata records each attempt, status and runtime;
+- timeout, normal unsolved, solver error and solved are distinct states.
+Production Success Rule
+Diagnostic solves using known RA/Dec do not count as Milestone 3 completion.
+Milestone 3 is complete only when the M57 benchmark produces a valid WCS with:
+- no target-name hint;
+- no RA/Dec hint;
+- no filename-derived position;
+- no M57-specific behavior.
+A generic camera-derived scale constraint is allowed and must be recorded. Final mode may be fully blind or position-blind, camera-scale-constrained.
+Diagnostic Artifacts
+Keep diagnostics separate, for example:
+outputs/m57-astrometry-diagnostics/
+    run_manifest.json
+    raster_known_position/
+    xyls_current_known_position/
+    xyls_flux100_known_position/
+    xyls_flux200_known_position/
+    xyls_flux400_known_position/
+    xyls_with_saturated_known_position/
+Each run records exact args, source policy/count, scale bounds, position-hint usage, timeout, result, runtime, WCS fields and log path.
+Debugging Definition of Done
+This subphase is complete when:
+1. the failure mode is identified with evidence;
+2. necessary general-purpose fixes are made only after diagnosis;
+3. regression tests cover the discovered issue;
+4. all previous tests remain green;
+5. lint/format checks pass;
+6. the real benchmark is retried without a sky-position hint;
+7. a valid WCS is produced, or the remaining blocker is documented precisely.
+Do not begin catalogue matching until this is resolved.

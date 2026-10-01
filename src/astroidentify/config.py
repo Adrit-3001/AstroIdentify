@@ -253,6 +253,109 @@ class DetectionConfig:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class AstrometryConfig:
+    """All tunable values used by Milestone 3 plate solving.
+
+    Nothing here may carry target knowledge: there is deliberately no RA/Dec or object-name
+    setting. The only optional constraint is a generic pixel-scale range, which must come
+    from telescope/camera properties and is used only by the final fallback attempt.
+
+    Attributes:
+        max_sources: Target number of sources in the first (preferred) selection.
+        expanded_max_sources: Target number for the larger fallback selections.
+        min_sources: Fewer usable sources than this is an error (the field cannot be solved).
+        grid_cells: Approximate number of cells in the spatial-balancing grid; the grid shape
+            follows the image aspect ratio. Ignored when ``grid_shape`` is set.
+        grid_shape: Explicit ``(columns, rows)`` for the balancing grid, or ``None``.
+        include_saturated: Rank saturated (core-centroided) sources together with
+            unsaturated ones by brightness in the main attempts. Blind solvers match the
+            brightest field stars to index stars, and in processed consumer images the
+            brightest stars are usually saturated. ``False`` sends unsaturated sources only.
+        allow_edge_fallback: Allow edge-flagged sources in the fallback attempt.
+        solve_field_path: Path to ``solve-field``; ``None`` searches ``PATH``.
+        astrometry_config: Astrometry.net engine config file; ``None`` uses the system
+            default (``/etc/astrometry.cfg``). Ignored when ``index_dirs`` is set.
+        index_dirs: Directories of index files; if given, a config listing only these is
+            generated for the solver.
+        timeout_seconds: Wall-clock limit for each solver attempt (hard kill).
+        total_timeout_seconds: Wall-clock budget for the whole attempt sequence; a
+            timed-out attempt does not stop later attempts while budget remains.
+        cpulimit_seconds: CPU-time limit passed to the solver (``--cpulimit``), capped at
+            the attempt's wall-clock limit.
+        scale_low_arcsec: Optional lower pixel-scale bound (arcsec/pixel) from camera
+            properties. When set, a scale-constrained attempt runs first; blind attempts
+            follow if it fails.
+        scale_high_arcsec: Optional upper pixel-scale bound (arcsec/pixel), as above.
+        keep_temp: Keep the solver working directory (debugging).
+        overlay_max_labels: Rank labels drawn on the selection overlay.
+    """
+
+    max_sources: int = 100
+    expanded_max_sources: int = 200
+    min_sources: int = 10
+    grid_cells: int = 16
+    grid_shape: tuple[int, int] | None = None
+    include_saturated: bool = True
+    allow_edge_fallback: bool = True
+
+    solve_field_path: str | None = None
+    astrometry_config: str | None = None
+    index_dirs: tuple[str, ...] = ()
+    timeout_seconds: float = 300.0
+    total_timeout_seconds: float = 900.0
+    cpulimit_seconds: float = 300.0
+    scale_low_arcsec: float | None = None
+    scale_high_arcsec: float | None = None
+    keep_temp: bool = False
+
+    overlay_max_labels: int = 30
+
+    def __post_init__(self) -> None:
+        if self.min_sources < 3:
+            raise ConfigurationError(f"min_sources must be >= 3, got {self.min_sources}")
+        if self.max_sources < self.min_sources:
+            raise ConfigurationError(
+                f"max_sources ({self.max_sources}) must be >= min_sources ({self.min_sources})"
+            )
+        if self.expanded_max_sources < self.max_sources:
+            raise ConfigurationError(
+                f"expanded_max_sources ({self.expanded_max_sources}) must be >= "
+                f"max_sources ({self.max_sources})"
+            )
+        if self.grid_cells < 1:
+            raise ConfigurationError(f"grid_cells must be >= 1, got {self.grid_cells}")
+        if self.grid_shape is not None and min(self.grid_shape) < 1:
+            raise ConfigurationError(f"grid_shape must be positive, got {self.grid_shape}")
+        if not (
+            self.timeout_seconds > 0
+            and self.cpulimit_seconds > 0
+            and self.total_timeout_seconds > 0
+        ):
+            raise ConfigurationError(
+                "timeout_seconds, total_timeout_seconds and cpulimit_seconds must be positive"
+            )
+        scales = (self.scale_low_arcsec, self.scale_high_arcsec)
+        if (scales[0] is None) != (scales[1] is None):
+            raise ConfigurationError("scale_low_arcsec and scale_high_arcsec must be set together")
+        if scales[0] is not None and not 0 < scales[0] < scales[1]:
+            raise ConfigurationError(
+                f"scale bounds must satisfy 0 < low < high, got {scales[0]}, {scales[1]}"
+            )
+        if self.overlay_max_labels < 0:
+            raise ConfigurationError("overlay_max_labels must be >= 0")
+
+    @property
+    def scale_bounds(self) -> tuple[float, float] | None:
+        if self.scale_low_arcsec is None or self.scale_high_arcsec is None:
+            return None
+        return (self.scale_low_arcsec, self.scale_high_arcsec)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable copy of the configuration."""
+        return asdict(self)
+
+
 def _check_percentiles(name: str, lower: float, upper: float) -> None:
     if not (0.0 <= lower < upper <= 100.0):
         raise ConfigurationError(

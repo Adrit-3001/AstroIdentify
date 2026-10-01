@@ -14,6 +14,9 @@ import pytest
 from astropy.io import fits
 from PIL import Image
 
+# Plate-solving fixtures (fake solve-field, index dir) shared by astrometry and CLI tests.
+pytest_plugins = ["tests.astrometry.fixtures"]
+
 BACKGROUND = 100.0
 NOISE = 5.0
 STARS: tuple[tuple[int, int, float], ...] = ((20, 30, 4000.0), (60, 90, 2500.0), (100, 15, 6000.0))

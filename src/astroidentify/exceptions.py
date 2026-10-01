@@ -65,3 +65,42 @@ class InvalidDetectionInputError(DetectionError):
 
 class BackgroundEstimationError(DetectionError):
     """The local background/RMS model could not be computed."""
+
+
+class AstrometryError(AstroIdentifyError):
+    """Base class for plate-solving failures.
+
+    ``log`` optionally carries solver output so failures keep their evidence.
+    """
+
+    def __init__(self, message: str, *, log: str | None = None) -> None:
+        super().__init__(message)
+        self.log = log
+
+
+class NoUsableSourcesError(AstrometryError):
+    """No detected source is usable for plate solving."""
+
+
+class TooFewSourcesError(AstrometryError):
+    """Fewer usable sources than the configured minimum."""
+
+
+class SolverNotFoundError(AstrometryError):
+    """The plate-solver executable (Astrometry.net ``solve-field``) is not available."""
+
+
+class IndexDataUnavailableError(AstrometryError):
+    """No Astrometry.net index files are configured/installed."""
+
+
+class SolverTimeoutError(AstrometryError):
+    """The plate solver exceeded its time limit."""
+
+
+class SolverProcessError(AstrometryError):
+    """The plate-solver process failed (non-zero exit status)."""
+
+
+class InvalidWCSError(AstrometryError):
+    """A WCS output is missing, malformed or not a usable celestial transform."""
