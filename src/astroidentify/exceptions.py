@@ -128,3 +128,7 @@ class CatalogTruncatedError(CatalogQueryError):
 
 class InputMismatchError(CatalogError):
     """Saved products (image, detections, plate solution) do not belong to the same image."""
+
+
+class CatalogCacheMissError(CatalogQueryError):
+    """Offline mode was requested but no matching cached catalogue response exists."""

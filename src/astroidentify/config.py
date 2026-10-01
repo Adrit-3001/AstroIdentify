@@ -495,6 +495,94 @@ class CatalogConfig:
         return asdict(self)
 
 
+#: Object categories annotated by default (see ``objects.filtering``). Stars are excluded:
+#: ordinary stars are Milestone 4's business (Gaia).
+DEFAULT_OBJECT_CATEGORIES: tuple[str, ...] = (
+    "planetary_nebula",
+    "nebula",
+    "supernova_remnant",
+    "star_cluster",
+    "galaxy",
+    "galaxy_group",
+)
+
+
+@dataclass(frozen=True)
+class ObjectConfig:
+    """All tunable values used by Milestone 5 object identification.
+
+    There is deliberately no object-name or sky-position setting: the query region is
+    always derived from the WCS.
+
+    Attributes:
+        tap_url: Base URL of the SIMBAD TAP service (synchronous queries go to ``/sync``).
+        query_margin_arcsec: Margin added to the farthest-corner cone radius.
+        max_object_radius_deg: Objects whose centre lies outside the cone are still returned
+            if their catalogued semi-major axis reaches into it, up to this radius (bounds
+            the outer search circle).
+        row_limit: Maximum rows requested (TAP ``MAXREC``); reaching it is an error.
+        network_timeout_seconds: Time limit for the request.
+        cache_dir: Response cache directory; ``None`` disables caching.
+        refresh_cache: Query live even if a matching cache entry exists (rewrites it).
+        offline: Never use the network; a missing cache entry is an error.
+        included_categories: Object categories retained for annotation.
+        include_candidates: Also retain SIMBAD "candidate" types (e.g. ``PN?``, ``G?``).
+        association_radius_arcsec: A compact object is associated with the nearest accepted
+            detection within this separation (Milestone 4's Gaia match radius).
+        compact_max_diameter_arcsec: Objects without a catalogued size, or with a major axis
+            up to this, are "compact" and eligible for point-source association.
+        evidence_min_pixels: Minimum footprint/annulus pixels for the local brightness
+            contrast measurement of extended objects.
+        overlay_max_objects: At most this many retained objects are drawn (highest listing
+            priority first); the rest stay in the tables.
+        overlay_max_labels: At most this many drawn objects are labelled.
+    """
+
+    tap_url: str = "https://simbad.cds.unistra.fr/simbad/sim-tap"
+    query_margin_arcsec: float = 30.0
+    max_object_radius_deg: float = 1.0
+    row_limit: int = 50_000
+    network_timeout_seconds: float = 120.0
+    cache_dir: str | None = None
+    refresh_cache: bool = False
+    offline: bool = False
+
+    included_categories: tuple[str, ...] = DEFAULT_OBJECT_CATEGORIES
+    include_candidates: bool = True
+    association_radius_arcsec: float = 3.0
+    compact_max_diameter_arcsec: float = 10.0
+    evidence_min_pixels: int = 25
+
+    overlay_max_objects: int = 40
+    overlay_max_labels: int = 25
+
+    def __post_init__(self) -> None:
+        if self.query_margin_arcsec < 0:
+            raise ConfigurationError("query_margin_arcsec must be >= 0")
+        if not 0 <= self.max_object_radius_deg <= 10:
+            raise ConfigurationError("max_object_radius_deg must be within 0-10")
+        if self.row_limit < 1:
+            raise ConfigurationError(f"row_limit must be >= 1, got {self.row_limit}")
+        if not self.network_timeout_seconds > 0:
+            raise ConfigurationError("network_timeout_seconds must be positive")
+        if self.offline and self.refresh_cache:
+            raise ConfigurationError("offline and refresh_cache are mutually exclusive")
+        if self.offline and self.cache_dir is None:
+            raise ConfigurationError("offline mode needs a cache directory")
+        if not self.association_radius_arcsec > 0:
+            raise ConfigurationError("association_radius_arcsec must be positive")
+        if self.compact_max_diameter_arcsec < 0:
+            raise ConfigurationError("compact_max_diameter_arcsec must be >= 0")
+        if self.evidence_min_pixels < 1:
+            raise ConfigurationError("evidence_min_pixels must be >= 1")
+        if self.overlay_max_objects < 0 or self.overlay_max_labels < 0:
+            raise ConfigurationError("overlay limits must be >= 0")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable copy of the configuration."""
+        return asdict(self)
+
+
 def _check_percentiles(name: str, lower: float, upper: float) -> None:
     if not (0.0 <= lower < upper <= 100.0):
         raise ConfigurationError(

@@ -319,3 +319,85 @@ def test_catalog_match_usage_error(saved_products, capsys) -> None:
     ]
     assert main([*args, "--match-radius", "-1"]) == EXIT_USAGE
     assert "match_radius_arcsec" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- identify
+
+
+@pytest.fixture
+def identify_products(saved_products, tmp_path: Path):
+    """Saved astrometry/catalogue directories for the synthetic field."""
+    p = saved_products
+    astrometry = tmp_path / "astro"
+    astrometry.mkdir()
+    (astrometry / "plate_solution.json").write_text(p["plate"].read_text())
+    (astrometry / "solution.wcs").write_bytes(p["wcs"].read_bytes())
+    return {**p, "astrometry": astrometry}
+
+
+def _fake_simbad(monkeypatch, rows):
+    from astroidentify import cli
+    from tests.objects.fixtures import FakeObjectProvider
+
+    monkeypatch.setattr(cli, "SimbadProvider", lambda config: FakeObjectProvider(rows))
+
+
+def _identify_args(p, out):
+    return ["identify", str(p["image"]), "--astrometry", str(p["astrometry"]),
+            "--detections", str(p["sources"]), "-o", str(out), "--no-cache"]  # fmt: skip
+
+
+def test_identify_success(identify_products, monkeypatch, tmp_path: Path, capsys) -> None:
+    from tests.objects.fixtures import row_at_pixel
+
+    p = identify_products
+    wcs = p["wcs_obj"]
+    rows = [row_at_pixel(wcs, 1, 80, 60, "PN", ids="NGC 1|NAME Test Nebula",
+                         galdim_majaxis=0.5, galdim_minaxis=0.5, galdim_angle=0),
+            row_at_pixel(wcs, 2, 150, 100, "*")]  # fmt: skip
+    _fake_simbad(monkeypatch, rows)
+    out = tmp_path / "objects"
+    assert main(_identify_args(p, out)) == EXIT_OK
+    stdout = capsys.readouterr().out
+    for label in ("Catalogue:", "WCS:", "Rows returned: 2", "Retained (non-stellar types): 1",
+                  "NGC 1", "Overlay:", "Summary:"):  # fmt: skip
+        assert label in stdout, label
+    assert "confidence" not in stdout.lower()
+    assert (out / "identification_summary.json").is_file()
+    assert (out / "object_overlay.png").is_file()
+
+
+def test_identify_valid_empty_field(identify_products, monkeypatch, tmp_path: Path, capsys):
+    _fake_simbad(monkeypatch, [])
+    assert main(_identify_args(identify_products, tmp_path / "o")) == EXIT_OK
+    assert "Retained (non-stellar types): 0" in capsys.readouterr().out
+
+
+def test_identify_missing_wcs(saved_products, tmp_path: Path, capsys) -> None:
+    args = ["identify", str(saved_products["image"]), "-o", str(tmp_path / "o"), "--no-cache"]
+    assert main(args) == EXIT_ERROR
+    assert "no WCS found" in capsys.readouterr().err
+
+
+def test_identify_network_failure(identify_products, monkeypatch, tmp_path: Path, capsys):
+    from astroidentify import cli
+    from astroidentify.exceptions import CatalogQueryError
+
+    class Down:
+        def query(self, region):
+            raise CatalogQueryError("could not reach the SIMBAD (CDS) TAP: offline")
+
+    monkeypatch.setattr(cli, "SimbadProvider", lambda config: Down())
+    assert main(_identify_args(identify_products, tmp_path / "o")) == EXIT_ERROR
+    assert "could not reach" in capsys.readouterr().err
+    assert not (tmp_path / "o" / "identification_summary.json").exists()
+
+
+def test_identify_offline_miss_and_usage(identify_products, tmp_path: Path, capsys) -> None:
+    p = identify_products
+    base = ["identify", str(p["image"]), "--astrometry", str(p["astrometry"])]
+    cache = ["--cache-dir", str(tmp_path / "empty-cache")]
+    assert main([*base, *cache, "--offline", "-o", str(tmp_path / "o")]) == EXIT_ERROR
+    assert "offline mode" in capsys.readouterr().err
+    assert main([*base, "--offline", "--no-cache"]) == EXIT_USAGE
+    assert main([*base, *cache, "--offline", "--refresh"]) == EXIT_USAGE

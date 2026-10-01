@@ -15,17 +15,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import io
-import json
 import logging
-import socket
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
+import urllib.request  # noqa: F401  (tests patch ``gaia.urllib.request.urlopen``)
 import warnings
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -33,13 +27,10 @@ import numpy as np
 from astropy.io.votable import parse
 from astropy.io.votable.exceptions import VOWarning
 
+from astroidentify.catalogs.tap import Fetch, cache_paths, read_cache, tap_fetch, write_cache
 from astroidentify.catalogs.types import CatalogQueryResult, CatalogTable, QueryRegion
 from astroidentify.config import CatalogConfig
-from astroidentify.exceptions import (
-    CatalogQueryError,
-    CatalogTimeoutError,
-    CatalogTruncatedError,
-)
+from astroidentify.exceptions import CatalogQueryError, CatalogTruncatedError
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +38,6 @@ PROVIDER = "ESA Gaia archive (TAP)"
 RELEASE = "Gaia DR3"
 CACHE_FORMAT_VERSION = 1
 
-Fetch = Callable[[str, dict[str, str], float], bytes]
 _INTEGER_COLUMNS = {"source_id"}
 
 
@@ -64,22 +54,7 @@ def build_adql(region: QueryRegion, columns: tuple[str, ...], table: str) -> str
 
 def http_fetch(url: str, params: dict[str, str], timeout: float) -> bytes:
     """POST a TAP request (form-encoded) and return the response body."""
-    data = urllib.parse.urlencode(params).encode("ascii")
-    request = urllib.request.Request(url, data=data, headers={"User-Agent": "astroidentify"})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read()
-    except urllib.error.HTTPError as exc:
-        body = exc.read(500).decode("utf-8", "replace") if exc.fp else ""
-        raise CatalogQueryError(
-            f"Gaia TAP service returned HTTP {exc.code}: {body.strip()}"
-        ) from exc
-    except TimeoutError as exc:
-        raise CatalogTimeoutError(f"Gaia query exceeded the {timeout:g} s time limit") from exc
-    except urllib.error.URLError as exc:
-        if isinstance(exc.reason, TimeoutError | socket.timeout):
-            raise CatalogTimeoutError(f"Gaia query exceeded the {timeout:g} s time limit") from exc
-        raise CatalogQueryError(f"could not reach the Gaia TAP service: {exc.reason}") from exc
+    return tap_fetch(url, params, timeout, "Gaia TAP service")
 
 
 class GaiaDR3Provider:
@@ -108,7 +83,7 @@ class GaiaDR3Provider:
         }
         cache = _cache_paths(config.cache_dir, identity)
         if cache is not None and not config.refresh_cache:
-            cached = _read_cache(*cache, identity)
+            cached = read_cache(*cache, identity)
             if cached is not None:
                 body, queried_at = cached
                 logger.info("Gaia DR3 rows loaded from cache %s", cache[0])
@@ -129,7 +104,7 @@ class GaiaDR3Provider:
         elapsed = time.monotonic() - started
         result = self._result(region, adql, body, "live", queried_at, elapsed, None)
         if cache is not None:
-            _write_cache(*cache, identity, body, queried_at)
+            write_cache(*cache, identity, body, queried_at)
             result = _with_cache_path(result, cache[0])
         logger.info("Gaia DR3 query returned %d rows in %.1f s", len(result.rows), elapsed)
         return result
@@ -222,40 +197,7 @@ def parse_votable(
 
 
 def _cache_paths(cache_dir: str | None, identity: dict) -> tuple[Path, Path] | None:
-    if cache_dir is None:
-        return None
-    key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]
-    base = Path(cache_dir).expanduser() / f"gaia_dr3-{key}"
-    return base.with_suffix(".vot"), base.with_suffix(".json")
-
-
-def _read_cache(data_path: Path, meta_path: Path, identity: dict) -> tuple[bytes, str] | None:
-    if not (data_path.is_file() and meta_path.is_file()):
-        return None
-    try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        logger.warning("ignoring unreadable catalogue cache entry %s", meta_path)
-        return None
-    if meta.get("identity") != identity:
-        logger.warning(
-            "ignoring catalogue cache entry %s with a different query identity", meta_path
-        )
-        return None
-    return data_path.read_bytes(), meta.get("queried_at", "unknown")
-
-
-def _write_cache(
-    data_path: Path, meta_path: Path, identity: dict, body: bytes, queried_at: str
-) -> None:
-    try:
-        data_path.parent.mkdir(parents=True, exist_ok=True)
-        data_path.write_bytes(body)
-        meta_path.write_text(
-            json.dumps({"identity": identity, "queried_at": queried_at}, indent=2), encoding="utf-8"
-        )
-    except OSError as exc:
-        logger.warning("could not write catalogue cache %s: %s", data_path, exc)
+    return cache_paths(cache_dir, "gaia_dr3", identity)
 
 
 def _with_cache_path(result: CatalogQueryResult, path: Path) -> CatalogQueryResult:

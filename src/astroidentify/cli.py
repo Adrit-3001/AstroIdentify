@@ -24,6 +24,7 @@ from astroidentify.config import (
     AstrometryConfig,
     CatalogConfig,
     DetectionConfig,
+    ObjectConfig,
     PreprocessingConfig,
 )
 from astroidentify.detection.outputs import DetectionOutputPaths, save_detection_outputs
@@ -31,6 +32,15 @@ from astroidentify.detection.pipeline import detect_sources
 from astroidentify.detection.types import DetectionResult
 from astroidentify.exceptions import AstroIdentifyError, ConfigurationError
 from astroidentify.logging import configure_logging
+from astroidentify.objects import (
+    ObjectOutputPaths,
+    SimbadProvider,
+    identify_objects,
+    load_identify_inputs,
+    save_object_outputs,
+)
+from astroidentify.objects.overlay import OverlayReport
+from astroidentify.objects.types import IdentificationResult
 from astroidentify.preprocessing.loader import SUPPORTED_EXTENSIONS
 from astroidentify.preprocessing.outputs import OutputPaths, default_output_dir, save_outputs
 from astroidentify.preprocessing.pipeline import preprocess_image
@@ -46,7 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="astroidentify",
         description="AstroIdentify astronomical image analysis "
         "(Milestone 1: preprocessing, Milestone 2: source detection, "
-        "Milestone 3: blind plate solving, Milestone 4: catalogue matching).",
+        "Milestone 3: blind plate solving, Milestone 4: catalogue matching, "
+        "Milestone 5: object identification).",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -284,6 +295,68 @@ def build_parser() -> argparse.ArgumentParser:
         help="maximum catalogue rows; reaching it is an error (default: %(default)s)",
     )
     _add_verbose(cat)
+
+    object_defaults = ObjectConfig()
+    ident = commands.add_parser(
+        "identify",
+        help="identify catalogued named objects in a solved image (SIMBAD)",
+        description="Query SIMBAD for the solved WCS footprint, place every catalogued object "
+        "on the image, keep non-stellar object types and annotate them. Uses saved Milestone "
+        "3/4 products. Reports catalogue presence and raw image evidence; no confidence.",
+    )
+    ident.add_argument("input", type=Path, help="the image the products were made from")
+    ident.add_argument(
+        "--astrometry", type=Path, help="Milestone 3 output directory (plate_solution.json)"
+    )
+    ident.add_argument(
+        "--catalog",
+        type=Path,
+        help="Milestone 4 output directory; its refined_solution.wcs is preferred",
+    )
+    ident.add_argument("--wcs", type=Path, help="explicit WCS file (overrides the defaults)")
+    ident.add_argument(
+        "--detections",
+        type=Path,
+        help="Milestone 2 sources.json (default: the one recorded by the catalogue run)",
+    )
+    ident.add_argument(
+        "-o", "--output", type=Path, help="output directory (default: outputs/<image name>-objects)"
+    )
+    ident.add_argument(
+        "--cache-dir",
+        default="outputs/.catalog-cache",
+        help="catalogue response cache directory (default: %(default)s)",
+    )
+    ident.add_argument("--no-cache", action="store_true", help="always query live, store nothing")
+    ident.add_argument(
+        "--offline", action="store_true", help="use only the cache; fail if the field is not cached"
+    )
+    ident.add_argument("--refresh", action="store_true", help="query live and overwrite the cache")
+    ident.add_argument(
+        "--timeout",
+        type=float,
+        default=object_defaults.network_timeout_seconds,
+        help="network time limit in seconds (default: %(default)s)",
+    )
+    ident.add_argument(
+        "--row-limit",
+        type=int,
+        default=object_defaults.row_limit,
+        help="maximum catalogue rows; reaching it is an error (default: %(default)s)",
+    )
+    ident.add_argument(
+        "--max-objects",
+        type=int,
+        default=object_defaults.overlay_max_objects,
+        help="objects drawn on the overlay (default: %(default)s)",
+    )
+    ident.add_argument(
+        "--max-labels",
+        type=int,
+        default=object_defaults.overlay_max_labels,
+        help="objects labelled on the overlay (default: %(default)s)",
+    )
+    _add_verbose(ident)
     return parser
 
 
@@ -315,6 +388,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_solve(args)
     if args.command == "catalog-match":
         return _run_catalog_match(args)
+    if args.command == "identify":
+        return _run_identify(args)
     return _run_preprocess(args)
 
 
@@ -455,6 +530,100 @@ def _run_catalog_match(args: argparse.Namespace) -> int:
         return EXIT_ERROR
     print(format_catalog_summary(result, paths))
     return EXIT_OK
+
+
+def _run_identify(args: argparse.Namespace) -> int:
+    try:
+        if args.no_cache and args.offline:
+            raise ConfigurationError("--offline needs the cache; do not combine with --no-cache")
+        config = ObjectConfig(
+            cache_dir=None if args.no_cache else args.cache_dir,
+            refresh_cache=args.refresh,
+            offline=args.offline,
+            network_timeout_seconds=args.timeout,
+            row_limit=args.row_limit,
+            overlay_max_objects=args.max_objects,
+            overlay_max_labels=args.max_labels,
+        )
+    except ConfigurationError as exc:
+        _error(exc)
+        return EXIT_USAGE
+
+    output_dir = args.output
+    if output_dir is None:
+        base = default_output_dir(args.input)
+        output_dir = base.with_name(f"{base.name}-objects")
+    try:
+        inputs = load_identify_inputs(
+            args.input,
+            astrometry_dir=args.astrometry,
+            catalog_dir=args.catalog,
+            wcs_path=args.wcs,
+            detections_path=args.detections,
+        )
+        result = identify_objects(
+            inputs.wcs, inputs.width, inputs.height, SimbadProvider(config), config,
+            inputs.detections, inputs.plane, inputs.wcs_choice,
+        )  # fmt: skip
+        paths, report = save_object_outputs(
+            result, inputs.image, output_dir, config, inputs.provenance
+        )
+    except ConfigurationError as exc:
+        _error(exc)
+        return EXIT_USAGE
+    except AstroIdentifyError as exc:
+        _error(exc)
+        return EXIT_ERROR
+    print(format_identify_summary(result, paths, report))
+    return EXIT_OK
+
+
+def format_identify_summary(
+    result: IdentificationResult, paths: ObjectOutputPaths, report: OverlayReport
+) -> str:
+    """Concise identification summary: catalogue facts and raw evidence, no confidence."""
+    q = result.query
+    wcs = result.wcs
+    lines = [
+        f"Catalogue: {q.service} ("
+        + (
+            f"cache, queried {q.queried_at}"
+            if q.origin == "cache"
+            else f"live, {q.query_seconds:.1f} s"
+        )
+        + ")",
+        f"WCS: {wcs.path} ({wcs.source})" if wcs else "WCS: supplied",
+        f"Query cone: centre ({q.region.centre.ra_deg:.5f}, {q.region.centre.dec_deg:+.5f}) deg, "
+        f"radius {q.region.radius_deg * 60:.2f}' "
+        f"(extended objects to {q.outer_radius_deg:.2f} deg)",
+        f"Rows returned: {len(q.rows)}",
+        f"In field: {len(result.in_field)} (catalogued objects of any type)",
+        f"Retained (non-stellar types): {len(result.retained)}; drawn {len(report.drawn)}, "
+        f"labelled {len(report.labelled)}",
+    ]
+    for obj in result.retained[:10]:
+        e = obj.extent
+        size = (
+            f"{e.major_arcmin:.2g}'x{e.minor_arcmin or e.major_arcmin:.2g}'"
+            if e.has_size
+            else "size n/a"
+        )
+        evidence = obj.association.kind if obj.association else "n/a"
+        lines.append(
+            f"  {obj.display_name} [{obj.main_id}] {obj.object_type_description or obj.object_type}"
+            f" at ({obj.projected_x:.1f}, {obj.projected_y:.1f}) px, {size}, evidence: {evidence}"
+        )
+    if len(result.retained) > 10:
+        lines.append(f"  ... {len(result.retained) - 10} more in {paths.objects_csv.name}")
+    lines += [
+        f"Objects: {paths.objects_csv}",
+        f"Associations: {paths.associations}",
+        f"Overlay: {paths.overlay}",
+        f"Summary: {paths.summary}",
+    ]
+    if result.warnings:
+        lines.append(f"Warnings: {'; '.join(result.warnings)}")
+    return "\n".join(lines)
 
 
 def format_catalog_summary(result: CatalogMatchResult, paths: CatalogOutputPaths) -> str:

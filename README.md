@@ -13,12 +13,14 @@ The project is built in milestones:
 | 3. Blind plate solving (WCS) | complete |
 | 4. Catalogue matching (Gaia DR3) | complete |
 | 4.1 Saturated-star astrometric centroids | complete |
-| 5+. Object identification, confidence, ML, API, frontend | not started |
+| 5. Object annotation and identification (SIMBAD) | complete |
+| 6+. Confidence, ML, Solar System, API, frontend | not started |
 
 With a local Astrometry.net installation, AstroIdentify determines where an unknown image
 points on the sky from its detected stars alone. It then associates the detected point sources
-with Gaia DR3 stars. It does **not** yet know *what* named object is in the image: that is
-Milestone 5.
+with Gaia DR3 stars, and lists and annotates the catalogued non-stellar objects (nebulae,
+galaxies, clusters, ...) that the WCS places in the image. It reports catalogue presence and raw
+image measurements; calibrated confidence is a later milestone.
 
 ## Milestone 1: what it does
 
@@ -507,8 +509,9 @@ save_astrometry_outputs(solution, detection, "outputs/field-astrometry")
 - The index stars are the saturated ones, so the solution depends on saturated-star centroids.
   Since Milestone 4.1 the source list uses the isophote-calibrated astrometric centroid. On the
   benchmark this lowered the solver's residual from 1.22″ to 0.66″ median and the WCS offset
-  for typical (unsaturated) stars from about 4.2″ to 1.6″. The remaining offset is mostly a
-  ~0.09% scale difference between the solver's SIP fit and a TAN fit to the faint stars.
+  for typical (unsaturated) stars from about 4.2″ to 1.6″. Most of the remaining offset is a
+  translation of about 1.6 px at the image centre (down from 4.7 px). This is consistent with
+  the residual bias of the largest saturated cores, which the calibration does not fully remove.
 - A fully blind search over all installed index scales is slow when the field's index stars
   are not in the list; camera-derived `--scale-low/--scale-high` bounds speed solving up a lot.
 - Debugging tools for this milestone live in `scripts/m57_astrometry_diagnostics.py`
@@ -636,7 +639,7 @@ distinct errors. "No matches" is a valid result, not an error.
 - Small residual distortion remains at the image corners (≤ 0.4 px mean per region) with the
   plain-TAN refined WCS.
 - Gaia DR3 only; other catalogues would be new providers behind the same interface.
-- Named-object identification (e.g. which nebula is in the field) is **not** implemented.
+- Named-object identification is Milestone 5 (below), not part of catalogue matching.
 
 ## Milestone 4.1: saturated-star astrometric centroids
 
@@ -718,6 +721,171 @@ Unsaturated sources are bit-identical: 0.0 px change on all 472 Gaia-associated 
 - The plateau is defined on the raw channels and the stack on the channel-mean plane. This
   assumes a colour-independent PSF shape.
 
+## Milestone 5: object annotation and identification (SIMBAD)
+
+**Purpose.** List every catalogued named object that the solved WCS places in the image,
+keep the scientifically interesting non-stellar ones, record objective image evidence for
+each, and draw them on the image.
+
+Here an identification means: *the WCS places this catalogued object at this position in the
+image*. Image evidence is recorded separately, and nothing is turned into a confidence or
+probability (that is Milestone 6).
+
+The only path to an identification is: image → WCS → WCS-derived sky region → catalogue query
+→ pixel projection → filtering/association → annotation. No object name, target coordinate or
+filename is ever an input, and the CLI has no such option.
+
+```bash
+astroidentify identify data/raw/M57__Ring_Nebula-eQuinox-20260925-003755.png \
+    --astrometry outputs/m57-astrometry-centroid-fixed \
+    --catalog outputs/m57-catalog-centroid-fixed \
+    --output outputs/m57-objects
+```
+
+The command reuses the saved Milestone 2–4 products and does not re-run Gaia.
+
+| Option | Effect |
+| --- | --- |
+| `--wcs FILE` | use this WCS file explicitly |
+| `--detections FILE` | Milestone 2 `sources.json` (default: the one the catalogue run used) |
+| `--cache-dir DIR` | response cache (default `outputs/.catalog-cache`) |
+| `--no-cache` | always query live, store nothing |
+| `--offline` | use only the cache; an uncached field is an error, never an empty result |
+| `--refresh` | query live and rewrite the cache entry |
+| `--max-objects N` | cap on objects drawn (default 40) |
+| `--max-labels N` | cap on labels (default 25) |
+| `--timeout S` | network time limit |
+| `--row-limit N` | maximum rows; reaching it is an error |
+
+**WCS choice.** In order:
+
+1. an explicit `--wcs`;
+2. Milestone 4's Gaia-refined `refined_solution.wcs`;
+3. Milestone 3's `solution.wcs`.
+
+Neither WCS file is ever modified. The summary records the path, its SHA-256, whether it is
+refined, and which artifact it came from. Every saved product that records an image hash
+must match the input image.
+
+**Catalogue: SIMBAD (requires network or a cache).**
+- **Interface.** CDS SIMBAD TAP (`/sync`, ADQL, VOTable), parsed with Astropy. No scraping
+  and no extra dependency.
+- **Tables.** One query joins:
+  - `basic`: identity, type, position, `galdim_*` angular size, morphology, redshift and
+    reference count;
+  - `ids`: all identifiers;
+  - `otypedef`: type description and hierarchy;
+  - `flux`: B and V magnitudes.
+- **Query geometry.**
+  - A cone from the WCS centre to the farthest image corner, plus 30″.
+  - Also any object within a wider circle (cone + 1°) whose catalogued semi-major axis reaches
+    into the cone. This means a large object centred outside the frame is still found.
+  - Every row is then projected through the WCS (Astropy `origin=0`, canonical pixels; the
+    Astrometry.net `+1` does not apply here) and filtered exactly against the image.
+- **Completeness.** No type filter is applied at query time: all rows are kept, with the reason
+  for any exclusion. `MAXREC` is an explicit row limit, and reaching it is an error. Very deep
+  survey fields can hit the limit, so raise `--row-limit` there.
+- **Cache.** Shared with Milestone 4. The key is a hash of service, exact ADQL and row limit,
+  so another field's response is never reused. Responses that fail to parse are not cached.
+  The raw response is also written to the output directory.
+
+**Object-type policy** (`objects/filtering.py`).
+- **How categories are assigned.** Categories follow SIMBAD's own type hierarchy
+  (`otypedef.path`), plus explicit overrides; planetary nebulae, for example, sit under evolved
+  stars in SIMBAD.
+- **Retained by default:**
+  - planetary nebulae;
+  - supernova remnants;
+  - nebulae (everything under ISM: H II regions, reflection/dark/diffuse nebulae, clouds);
+  - star clusters and associations;
+  - galaxies (including AGN and quasars);
+  - galaxy pairs, groups and clusters.
+- **Excluded, but kept in the tables:**
+  - stars, which are Milestone 4's business;
+  - moving groups and streams;
+  - parts of galaxies;
+  - radio, IR, X-ray and UV sources and other non-object types;
+  - unknown types.
+- SIMBAD "candidate" types (`?`) are retained and flagged.
+
+**Display names** (`objects/naming.py`). Identifiers are normalised by collapsing whitespace.
+The preference is Messier → NGC → IC → other common catalogues (Sharpless, Collinder,
+Melotte, Trumpler, Berkeley, King, Stock, Abell PN/clusters, Barnard, vdB, LBN, LDN, UGC, MCG,
+PGC, PN G) → SIMBAD `main_id`. SIMBAD `NAME` identifiers are reported as `common_names` and
+shown in parentheses on the overlay, but are never the primary label. All aliases and the
+raw `main_id`/SIMBAD `oid` are kept.
+
+**Angular extent** (`objects/extent.py`).
+- **Units.** SIMBAD `galdim_majaxis`/`galdim_minaxis` are full axes in arcmin, and
+  `galdim_angle` is the position angle east of north.
+- **Drawing.** The ellipse is built on the sky (Astropy `directional_offset_by`) and projected
+  through the WCS, so rotation and parity come from the WCS alone.
+- **Reliability.**
+  - All three values known → ellipse.
+  - Only a major axis (or no angle for an elongated object) → circle of the major axis, a
+    conservative superset.
+  - No size → position marker only. No size is ever invented.
+- **Field status.** An object whose centre is outside the frame but whose footprint overlaps it
+  is in the field (`extent_overlaps_image`), with the fraction of its footprint inside the image.
+
+**Image association** (`objects/association.py`). The two are recorded separately from
+catalogue presence.
+- **Compact objects** (no size, or ≤ 10″): the nearest accepted Milestone 2 detection within
+  3″, using its astrometric centroid; ties go to the lower `source_id`. Otherwise
+  association `none`.
+- **Extended objects:**
+  - the number of accepted detections inside the footprint;
+  - a brightness contrast `(median inside − median of a 1.5–2.5× annulus) / (1.4826 × MAD of
+    the annulus)` on the original pixels (channel mean).
+
+  These are raw measurements, not probabilities. `catalogued_in_field` objects can have
+  association `none`.
+
+**Outputs** (`outputs/<name>-objects/`):
+
+```text
+object_query.json            service, cone + outer radius, ADQL, columns, row limit,
+                             live/cache, cache key/path, timestamps, row count
+simbad_response.vot          raw SIMBAD response (offline replay/provenance)
+catalog_objects.csv / .json  every returned row: identity, aliases, type/category, RA/Dec,
+                             projected x/y, field status, extent, magnitudes, redshift,
+                             status/exclusion reason (+ projected outlines in JSON)
+object_associations.csv      image evidence for retained objects
+identification_summary.json  inputs/hashes, WCS used, query, counts by type/category,
+                             retained objects, policy, warnings, artifacts
+object_overlay.png           annotated image, same size as the input
+```
+
+There is no primary-object selection. Retained objects are listed in a deterministic
+presentation order: designation rank, then catalogued size, then reference count.
+
+**Benchmark.** With the refined WCS and a live query:
+- **Query results.** 206 rows. 131 lie in the field and 21 are retained (19 galaxies, 1
+  planetary nebula, 1 star cluster).
+- **Central feature.** The extended object near the image centre is catalogued as **M 57**
+  (NGC 6720, a planetary nebula, SIMBAD common name "Ring Nebula"). It projects to (1258.8,
+  937.1) px, about 30 px from the image centre. The light centroid of the feature measured
+  afterwards is 2.6 px from that position, and its ring profile matches the catalogued 1.15′
+  diameter (40 px radius). Its brightness contrast is 37.5 σ.
+- **Other objects.** These include IC 1296 (a galaxy about 4′ west) and several small LEDA/2MASX
+  galaxies. One is a 2° open cluster (PHOC 41) whose centre lies outside the frame and whose
+  footprint crosses it.
+
+**Limitations.**
+- SIMBAD completeness and size information vary. Many small galaxies have sizes but no
+  position angle (drawn as circles), and some have none.
+- Very large catalogued footprints (e.g. a 2° cluster) are reported faithfully even though
+  they are not visually distinct in a 36′ field.
+- The brightness contrast is a simple local statistic. Stars, gradients or a footprint larger
+  than the image can affect it, and it is absent when the annulus falls outside the image.
+- Magnitudes are SIMBAD's catalogue values (for some nebulae, those of a central star), not
+  image photometry.
+- Positions are at SIMBAD's epoch (no proper motion; negligible for extended objects).
+- Overlay label placement is greedy. In crowded areas some labels are skipped; every object
+  is still in the tables.
+- No confidence calibration, ML verification or Solar System objects; these are later
+  milestones.
+
 ## Development
 
 ```bash
@@ -730,6 +898,9 @@ ASTROIDENTIFY_BUILD_INDEX=$(which build-astrometry-index) pytest -m integration
 
 # Optional: live Gaia DR3 query (network)
 ASTROIDENTIFY_LIVE_GAIA=1 pytest tests/catalogs/test_live_gaia.py
+
+# Optional: live SIMBAD query (network)
+ASTROIDENTIFY_LIVE_SIMBAD=1 pytest tests/objects/test_live_simbad.py
 ```
 
 Tests generate synthetic star fields with fixed seeds, so they need no data files. Put your
@@ -788,7 +959,7 @@ src/astroidentify/
 2. **Source/star detection** (done)
 3. **Astrometric plate solving / WCS** (done; needs local Astrometry.net + index data)
 4. **Catalogue matching** (done: Gaia DR3; 4.1 saturated-star astrometric centroids)
-5. Annotation and identification
+5. **Annotation and identification** (done: SIMBAD)
 6. Evidence/confidence estimation
 7. CV/ML verification
 8. Solar-system objects
