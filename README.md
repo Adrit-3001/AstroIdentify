@@ -4,12 +4,20 @@ AstroIdentify aims to take an astronomical image with little or no context, work
 the sky it points, identify catalogued objects in the field, annotate the image and explain how
 confident it is in each identification.
 
-The project is built in milestones. **Milestones 1 (preprocessing), 2 (stellar source
-detection) and 3 (blind plate solving) are implemented.** With a local Astrometry.net
-installation and index data, AstroIdentify can determine where an unknown image points on the
-sky (a WCS) from its detected stars alone. It does **not** yet know *what* is in the image:
-catalogue queries, object identification, ML verification, an API and a web frontend are
-deliberately left to future milestones.
+The project is built in milestones:
+
+| Milestone | Status |
+| --- | --- |
+| 1. Image ingestion and preprocessing | complete |
+| 2. Stellar source detection | complete |
+| 3. Blind plate solving (WCS) | complete |
+| 4. Catalogue matching (Gaia DR3) | complete |
+| 5+. Object identification, confidence, ML, API, frontend | not started |
+
+With a local Astrometry.net installation, AstroIdentify determines where an unknown image
+points on the sky from its detected stars alone. It then associates the detected point sources
+with Gaia DR3 stars. It does **not** yet know *what* named object is in the image: that is
+Milestone 5.
 
 ## Milestone 1: what it does
 
@@ -490,6 +498,11 @@ save_astrometry_outputs(solution, detection, "outputs/field-astrometry")
   dependence, so no extra distortion model is used.
 - Residuals (median about 1.2″) are dominated by saturated-core centroid scatter, because the
   index stars are the saturated ones.
+- **Zero-point bias found in Milestone 4.** On comet-shaped (coma) PSFs, the centroid of a large
+  saturated core is biased by up to ~5 px relative to ordinary stars. The benchmark WCS is
+  anchored on the 25 brightest saturated stars, so it is consistent with them but offset by
+  about 4″ for typical stars. Milestone 4 measures this and matches with a catalogue-refined
+  WCS; the Milestone 3 WCS file itself is unchanged.
 - A fully blind search over all installed index scales is slow when the field's index stars
   are not in the list; camera-derived `--scale-low/--scale-high` bounds speed solving up a lot.
 - Debugging tools for this milestone live in `scripts/m57_astrometry_diagnostics.py`
@@ -497,6 +510,127 @@ save_astrometry_outputs(solution, detection, "outputs/field-astrometry")
 - Object identification is **not** implemented: the WCS says where the image points, not what
   is in it.
 
+
+## Milestone 4: catalogue matching (Gaia DR3)
+
+Catalogue matching associates the accepted Milestone 2 detections of a plate-solved image with
+**Gaia DR3** stars. The result is a set of point-source correspondences with measured
+residuals, for example "these 614 detections are these Gaia DR3 sources, with a median offset
+of 0.67″". It is **not** object identification: nothing is named, and no target is inferred.
+That is the next milestone.
+
+```bash
+astroidentify catalog-match data/raw/M57__Ring_Nebula-eQuinox-20260925-003755.png \
+    --plate-solution outputs/m57-astrometry/plate_solution.json \
+    --wcs outputs/m57-astrometry/solution.wcs \
+    --detections outputs/m57-detection/sources.json \
+    --output outputs/m57-catalog
+```
+
+It consumes the saved Milestone 2/3 products (no re-detection or re-solving). It checks that
+the image, detections and plate solution share the same image SHA-256 and size, and that the
+plate solution is solved and its WCS is valid. Benchmark result (live Gaia query):
+
+```text
+Catalogue: Gaia DR3 (live, 69.4 s)
+Query cone: centre (283.38646, +33.02704) deg, radius 23.36'
+Rows returned: 22477
+Rows in image: 13170 (1929 eligible by brightness)
+Accepted detections: 643
+Input WCS check: median offset 4.14" over 473 registration pairs; refined WCS used
+Matches: 614 (95.5% of detections, 31.8% of eligible catalogue stars)
+Median residual: 0.668" (0.78 px)
+RMS residual: 0.982" (1.15 px); max 2.966"
+Unmatched: 29 detections, 1315 eligible catalogue stars
+Epoch propagation: no (no reliable observation timestamp)
+```
+
+### Method
+
+1. **Query region from the WCS.** A cone centred on the WCS image centre whose radius reaches
+   the farthest image corner, plus a 30″ margin. This safely covers any rotated or flipped
+   footprint without RA wrap problems. Rows are then filtered *exactly*: each is projected
+   through the WCS (Astropy, `origin=0`, canonical pixels; the Astrometry.net `+1` applies only
+   to its source lists) and kept only if it falls inside the image and projects back
+   consistently.
+2. **Gaia DR3 provider.** Standard IVOA TAP synchronous ADQL query to the ESA Gaia archive
+   (`gaiadr3.gaia_source`), parsed with Astropy's VOTable reader; no extra client dependency
+   and no scraping. Columns: `source_id, ra, dec, ra_error, dec_error, phot_g/bp/rp_mean_mag,
+   pmra, pmdec, parallax, ref_epoch`. There is no `TOP N`; `MAXREC` is an explicit
+   `--row-limit` (200,000), and reaching it (TAP `OVERFLOW`) is an error, never a silently
+   incomplete field. Missing values stay null.
+3. **Epoch.** Gaia positions are at J2016.0. Proper motion is applied (Astropy
+   `apply_space_motion`) only when a reliable timestamp exists: `--observation-date`, FITS
+   `DATE-OBS`/`MJD-OBS`, or EXIF `DateTimeOriginal`. Filenames are never parsed. The benchmark
+   PNG has no usable timestamp, so catalogue-epoch positions are used and recorded as such.
+4. **Eligibility.** Only the brightest `3 × N_detections` in-image Gaia stars are eligible. A
+   catalogue to G≈21 mostly adds faint stars the image cannot show, which can only create chance
+   coincidences. On the benchmark this cut the estimated chance matches (by shifting the
+   catalogue 60″) from 66 to 8 while losing 3 genuine matches.
+5. **WCS refinement.** Mutually nearest, isolated, unsaturated detection/Gaia pairs within 12″
+   (through the input WCS) are used to refit a TAN WCS with Astropy `fit_wcs_from_points`, with
+   4σ clipping. Why: a plate solution fitted to a few bright, saturated stars can carry a
+   zero-point bias (about 4″ on the benchmark; see Milestone 3 limitations). The input WCS is
+   never modified. The refined one is written as `refined_solution.wcs`, and the input-WCS
+   offset is reported. Distortion terms gave no held-out improvement on the benchmark, so the
+   default is plain TAN (`--no-refine` disables refinement).
+6. **One-to-one matching** within `--match-radius` (default **3″**, about 3.5 px at
+   0.857″/px). Candidate pairs are processed in ascending angular separation, ties broken by
+   Gaia `source_id` then detection `source_id`; a pair is accepted if neither side is taken.
+   Deterministic, one-to-one, closer pairs win conflicts. The radius is about 3× the refined
+   median residual. Widening to 4″ adds about as many chance matches as real ones.
+
+All accepted Milestone 2 detections are used (643 on the benchmark), not just the 100 plate-
+solving stars, and every match keeps both the detection `source_id` and the Gaia `source_id`.
+
+### Outputs
+
+```text
+outputs/<name>-catalog/
+    catalog_query.json          service, release, cone, exact ADQL, columns, row limit,
+                                truncation, live/cache origin, query time, epoch handling
+    gaia_sources.csv            every returned row + projected x/y, in_image, eligible,
+                                matched_detection_source_id
+    catalog_matches.csv         one row per match: both IDs, observed/predicted x/y, residual
+                                px/arcsec, catalogue and projected RA/Dec, G/BP/RP, parallax,
+                                pmra/pmdec, detection flux/SNR/saturated/edge, candidate count
+    catalog_match_summary.json  input provenance (paths, SHA-256, plate-solution mode), matching
+                                configuration, metrics, WCS-refinement diagnostics, unmatched
+                                detection IDs, warnings
+    refined_solution.wcs        catalogue-refined WCS (if refinement ran)
+    catalog_overlay.png         coordinate-exact overlay: green = matches, cyan = eligible Gaia
+                                positions, grey = unmatched detections, orange = residual
+                                vectors magnified 20×, G-magnitude labels on the brightest
+```
+
+Metrics: rows returned / in image / eligible, detections considered, matches, detection and
+catalogue match fractions, median/RMS/max residual (arcsec and px), mean offset, unmatched
+counts, detections with more than one candidate, and whether proper motion was applied. No
+confidence or identification score is computed.
+
+### Network and cache
+
+A live query needs network access to `gea.esac.esa.int` (about 70 s for the benchmark field).
+Responses are cached in `outputs/.catalog-cache/` (`--cache-dir`, `--no-cache`). A cache entry
+stores the raw VOTable plus its exact query identity (service, table, ADQL including centre,
+radius and columns, and row limit). It is reused only when the identity matches exactly, and
+the output records `origin: cache` with the original query time. `--refresh-cache` forces a
+live query. Timeouts (`--timeout`), HTTP/service errors, malformed responses and truncation are
+distinct errors. "No matches" is a valid result, not an error.
+
+### Known limitations (Milestone 4)
+
+- **Bright saturated stars are mostly unmatched.** Stars brighter than G≈11 have large saturated
+  cores whose centroids are biased by ~4–5 px on this telescope's comet-shaped PSF, beyond the
+  3″ radius (22 of the 29 unmatched detections). A better saturated-star centroid in
+  Milestone 2 would fix this at the source.
+- Without an observation timestamp, positions are at the Gaia epoch (J2016). High-proper-motion
+  stars (above ~0.2″/yr) can then miss the radius after a decade. `--observation-date` enables
+  propagation.
+- Small residual distortion remains at the image corners (≤ 0.4 px mean per region) with the
+  plain-TAN refined WCS.
+- Gaia DR3 only; other catalogues would be new providers behind the same interface.
+- Named-object identification (e.g. which nebula is in the field) is **not** implemented.
 
 ## Development
 
@@ -507,6 +641,9 @@ ruff check . && ruff format --check .
 # Optional: end-to-end test against a real Astrometry.net (builds a synthetic index itself)
 ASTROIDENTIFY_SOLVE_FIELD=$(which solve-field) \
 ASTROIDENTIFY_BUILD_INDEX=$(which build-astrometry-index) pytest -m integration
+
+# Optional: live Gaia DR3 query (network)
+ASTROIDENTIFY_LIVE_GAIA=1 pytest tests/catalogs/test_live_gaia.py
 ```
 
 Tests generate synthetic star fields with fixed seeds, so they need no data files. Put your
@@ -514,12 +651,12 @@ own images in `data/raw/` (git-ignored); generated results go in `outputs/` (git
 
 ```text
 src/astroidentify/
-    config.py          Preprocessing/Detection/AstrometryConfig (all tunable values, validated)
+    config.py          Preprocessing/Detection/Astrometry/CatalogConfig (all tunable values)
     exceptions.py      domain-specific errors
     types.py           AstronomyImage, PreprocessingResult, BackgroundEstimate, ...
     logging.py         CLI logging setup (library code only logs, never prints)
     serialization.py   shared JSON/array/output-directory helpers
-    cli.py             `astroidentify preprocess | detect | solve ...`
+    cli.py             `astroidentify preprocess | detect | solve | catalog-match ...`
     preprocessing/
         loader.py      JPEG/PNG/FITS -> AstronomyImage (the only format-specific code)
         background.py  background level, noise, pixel-to-pixel noise
@@ -548,14 +685,23 @@ src/astroidentify/
         outputs.py     artifacts and plate_solution.json
         pipeline.py    plate_solve(): deterministic attempt sequence
         types.py       SourceSelection, PlateSolution, WcsGeometry, ...
+    catalogs/
+        footprint.py   WCS validation, query cone, projection + exact in-image filter
+        gaia.py        Gaia DR3 TAP provider (ADQL, VOTable parsing, truncation, cache)
+        epoch.py       observation epoch from metadata; proper-motion propagation
+        matching.py    eligibility, WCS refinement, deterministic one-to-one assignment
+        pipeline.py    load_match_inputs() / match_catalog()
+        overlay.py     catalog_overlay.png
+        outputs.py     artifacts and JSON/CSV serialization
+        types.py       QueryRegion, CatalogQueryResult, CatalogMatch, MatchSummary, ...
 ```
 
 ## Roadmap
 
 1. **Image ingestion and preprocessing** (done)
 2. **Source/star detection** (done)
-3. **Astrometric plate solving / WCS** (implemented; needs local Astrometry.net + index data)
-4. Catalogue matching (Gaia, SIMBAD)
+3. **Astrometric plate solving / WCS** (done; needs local Astrometry.net + index data)
+4. **Catalogue matching** (done: Gaia DR3)
 5. Annotation and identification
 6. Evidence/confidence estimation
 7. CV/ML verification

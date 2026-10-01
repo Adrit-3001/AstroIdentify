@@ -15,9 +15,14 @@ from astroidentify.astrometry.outputs import AstrometryOutputPaths, save_astrome
 from astroidentify.astrometry.pipeline import plate_solve
 from astroidentify.astrometry.types import PlateSolution
 from astroidentify.astrometry.wcs import format_dec, format_ra
+from astroidentify.catalogs.gaia import GaiaDR3Provider
+from astroidentify.catalogs.outputs import CatalogOutputPaths, save_catalog_outputs
+from astroidentify.catalogs.pipeline import load_match_inputs, match_catalog
+from astroidentify.catalogs.types import CatalogMatchResult
 from astroidentify.config import (
     PREVIEW_STRETCHES,
     AstrometryConfig,
+    CatalogConfig,
     DetectionConfig,
     PreprocessingConfig,
 )
@@ -41,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="astroidentify",
         description="AstroIdentify astronomical image analysis "
         "(Milestone 1: preprocessing, Milestone 2: source detection, "
-        "Milestone 3: blind plate solving).",
+        "Milestone 3: blind plate solving, Milestone 4: catalogue matching).",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -219,6 +224,66 @@ def build_parser() -> argparse.ArgumentParser:
     )
     solve.add_argument("--keep-temp", action="store_true", help="keep the solver working directory")
     _add_verbose(solve)
+
+    catalog_defaults = CatalogConfig()
+    cat = commands.add_parser(
+        "catalog-match",
+        help="match a solved image's detections to Gaia DR3 stars",
+        description="Query Gaia DR3 for the solved WCS footprint and associate catalogue stars "
+        "one-to-one with the accepted detections. Uses saved Milestone 2/3 products. This is "
+        "point-source correspondence, not object identification.",
+    )
+    cat.add_argument("input", type=Path, help="the image the products were made from")
+    cat.add_argument(
+        "--plate-solution", type=Path, required=True, help="plate_solution.json (solved)"
+    )
+    cat.add_argument("--wcs", type=Path, help="solution.wcs (default: next to --plate-solution)")
+    cat.add_argument("--detections", type=Path, required=True, help="Milestone 2 sources.json")
+    cat.add_argument(
+        "-o", "--output", type=Path, help="output directory (default: outputs/<image name>-catalog)"
+    )
+    cat.add_argument(
+        "--match-radius",
+        type=float,
+        default=catalog_defaults.match_radius_arcsec,
+        help="maximum match separation in arcsec (default: %(default)s)",
+    )
+    cat.add_argument(
+        "--brightness-factor",
+        type=float,
+        default=catalog_defaults.brightness_rank_factor,
+        help="eligible catalogue stars = brightest FACTOR x N_detections in the image; 0 = all "
+        "(default: %(default)s)",
+    )
+    cat.add_argument(
+        "--no-refine", action="store_true", help="match with the input WCS without refinement"
+    )
+    cat.add_argument(
+        "--observation-date",
+        help="observation date/time (ISO 8601) for proper motion when the image has none",
+    )
+    cat.add_argument(
+        "--cache-dir",
+        default="outputs/.catalog-cache",
+        help="catalogue response cache directory (default: %(default)s)",
+    )
+    cat.add_argument("--no-cache", action="store_true", help="always query live, store nothing")
+    cat.add_argument(
+        "--refresh-cache", action="store_true", help="query live and overwrite any cache entry"
+    )
+    cat.add_argument(
+        "--timeout",
+        type=float,
+        default=catalog_defaults.network_timeout_seconds,
+        help="network time limit in seconds (default: %(default)s)",
+    )
+    cat.add_argument(
+        "--row-limit",
+        type=int,
+        default=catalog_defaults.row_limit,
+        help="maximum catalogue rows; reaching it is an error (default: %(default)s)",
+    )
+    _add_verbose(cat)
     return parser
 
 
@@ -248,6 +313,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_detect(args)
     if args.command == "solve":
         return _run_solve(args)
+    if args.command == "catalog-match":
+        return _run_catalog_match(args)
     return _run_preprocess(args)
 
 
@@ -350,6 +417,89 @@ def _run_solve(args: argparse.Namespace) -> int:
         _error(f"plate solving {solution.status.replace('_', ' ')}: {solution.error}")
         return EXIT_ERROR
     return EXIT_OK
+
+
+def _run_catalog_match(args: argparse.Namespace) -> int:
+    try:
+        config = CatalogConfig(
+            match_radius_arcsec=args.match_radius,
+            brightness_rank_factor=args.brightness_factor or None,
+            refine_wcs=not args.no_refine,
+            observation_epoch=args.observation_date,
+            cache_dir=None if args.no_cache else args.cache_dir,
+            refresh_cache=args.refresh_cache,
+            network_timeout_seconds=args.timeout,
+            row_limit=args.row_limit,
+        )
+    except ConfigurationError as exc:
+        _error(exc)
+        return EXIT_USAGE
+
+    wcs_path = args.wcs or args.plate_solution.with_name("solution.wcs")
+    output_dir = args.output
+    if output_dir is None:
+        base = default_output_dir(args.input)
+        output_dir = base.with_name(f"{base.name}-catalog")
+    try:
+        inputs = load_match_inputs(args.input, args.plate_solution, wcs_path, args.detections)
+        result = match_catalog(
+            inputs.sources, inputs.wcs, inputs.width, inputs.height,
+            GaiaDR3Provider(config), config, inputs.image.metadata,
+        )  # fmt: skip
+        paths = save_catalog_outputs(result, inputs.image, output_dir, config, inputs.provenance)
+    except ConfigurationError as exc:
+        _error(exc)
+        return EXIT_USAGE
+    except AstroIdentifyError as exc:
+        _error(exc)
+        return EXIT_ERROR
+    print(format_catalog_summary(result, paths))
+    return EXIT_OK
+
+
+def format_catalog_summary(result: CatalogMatchResult, paths: CatalogOutputPaths) -> str:
+    """Concise catalogue-match summary (no identification verdict)."""
+    s = result.summary
+    q = result.query
+    refinement = result.refinement
+    lines = [
+        f"Catalogue: {q.release} ({q.origin}"
+        + (f", queried {q.queried_at}" if q.origin == "cache" else f", {q.query_seconds:.1f} s")
+        + ")",
+        f"Query cone: centre ({q.region.centre.ra_deg:.5f}, {q.region.centre.dec_deg:+.5f}) deg, "
+        f"radius {q.region.radius_deg * 60:.2f}'",
+        f"Rows returned: {s.rows_returned}",
+        f"Rows in image: {s.rows_in_image} ({s.rows_eligible} eligible by brightness)",
+        f"Accepted detections: {s.detections_considered}",
+    ]
+    if refinement is not None and refinement.input_median_offset_arcsec is not None:
+        lines.append(
+            f'Input WCS check: median offset {refinement.input_median_offset_arcsec:.2f}" over '
+            f"{refinement.n_pairs} registration pairs; "
+            + ("refined WCS used" if result.wcs_refined else "input WCS used")
+        )
+    if s.matches:
+        lines += [
+            f"Matches: {s.matches} ({s.detection_match_fraction:.1%} of detections, "
+            f"{s.catalog_match_fraction_eligible:.1%} of eligible catalogue stars)",
+            f'Median residual: {s.median_residual_arcsec:.3f}" ({s.median_residual_px:.2f} px)',
+            f'RMS residual: {s.rms_residual_arcsec:.3f}" ({s.rms_residual_px:.2f} px); '
+            f'max {s.max_residual_arcsec:.3f}"',
+        ]
+    else:
+        lines.append("Matches: 0 (no detection within the match radius of a catalogue star)")
+    lines += [
+        f"Unmatched: {s.unmatched_detections} detections, "
+        f"{s.unmatched_catalog_eligible} eligible catalogue stars",
+        f"Epoch propagation: {'yes' if s.epoch_propagated else 'no'}"
+        + ("" if s.epoch_propagated else " (no reliable observation timestamp)"),
+        f"Matches: {paths.matches}",
+        f"Overlay: {paths.overlay}",
+        f"Summary: {paths.summary}",
+    ]
+    if result.warnings:
+        lines.append(f"Warnings: {len(result.warnings)} (see summary)")
+    return "\n".join(lines)
 
 
 def format_solve_summary(solution: PlateSolution, paths: AstrometryOutputPaths) -> str:

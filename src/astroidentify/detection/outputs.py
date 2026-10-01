@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -199,6 +200,36 @@ def build_detection_metadata(
         "config": result.config.to_dict(),
         "artifacts": {name: path.name for name, path in _artifacts(paths)},
     }
+
+
+def load_sources(path: str | Path) -> list[Source]:
+    """Read a ``sources.json`` written by :func:`save_detection_outputs` back into ``Source``s.
+
+    JSON ``null`` (written for NaN) becomes NaN again for float fields.
+
+    Raises:
+        OutputError: The file is missing or not a valid sources document.
+    """
+    try:
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+        records = document["sources"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise OutputError(f"could not read detection sources from {path}: {exc}") from exc
+    float_fields = {f.name for f in fields(Source) if f.type in ("float", float)}
+    sources = []
+    for record in records:
+        values = dict(record)
+        for name in float_fields:
+            if values.get(name) is None:
+                values[name] = float("nan")
+        values["rejection_reasons"] = tuple(values.get("rejection_reasons") or ())
+        try:
+            sources.append(
+                Source(**{f.name: values[f.name] for f in fields(Source) if f.name in values})
+            )
+        except TypeError as exc:
+            raise OutputError(f"malformed source record in {path}: {exc}") from exc
+    return sources
 
 
 def _artifacts(paths: DetectionOutputPaths | None) -> list[tuple[str, Path]]:

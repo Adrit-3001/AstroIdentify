@@ -15,7 +15,7 @@ from astropy.io import fits
 from PIL import Image
 
 # Plate-solving fixtures (fake solve-field, index dir) shared by astrometry and CLI tests.
-pytest_plugins = ["tests.astrometry.fixtures"]
+pytest_plugins = ["tests.astrometry.fixtures", "tests.catalogs.conftest_fixtures"]
 
 BACKGROUND = 100.0
 NOISE = 5.0

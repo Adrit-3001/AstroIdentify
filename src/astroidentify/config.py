@@ -356,6 +356,121 @@ class AstrometryConfig:
         return asdict(self)
 
 
+GAIA_DR3_COLUMNS: tuple[str, ...] = (
+    "source_id",
+    "ra",
+    "dec",
+    "ra_error",
+    "dec_error",
+    "phot_g_mean_mag",
+    "phot_bp_mean_mag",
+    "phot_rp_mean_mag",
+    "pmra",
+    "pmdec",
+    "parallax",
+    "ref_epoch",
+)
+
+
+@dataclass(frozen=True)
+class CatalogConfig:
+    """All tunable values used by Milestone 4 catalogue matching.
+
+    There is deliberately no sky-position or object-name setting: the query region is
+    always derived from the solved WCS.
+
+    Attributes:
+        tap_url: Base URL of the Gaia TAP service (synchronous queries go to ``/sync``).
+        table: Gaia DR3 source table.
+        columns: Columns retrieved (compact: astrometry, photometry, motion).
+        query_margin_arcsec: Safety margin added to the farthest-corner cone radius.
+        row_limit: Maximum rows requested (TAP ``MAXREC``). Hitting it is an error, never
+            silently treated as a complete field.
+        network_timeout_seconds: Time limit for the catalogue request.
+        cache_dir: Directory for the on-disk response cache; ``None`` disables caching.
+        refresh_cache: Ignore an existing cache entry and query live (the entry is rewritten).
+        match_radius_arcsec: Maximum detection-to-catalogue separation for a final match.
+        brightness_rank_factor: Only the brightest ``factor * N_detections`` in-frame catalogue
+            stars are eligible for matching (``None``: all). A catalogue far deeper than the
+            image mostly adds faint stars that can only produce chance coincidences.
+        refine_wcs: Refine the input WCS against the catalogue before the final match (see
+            ``catalogs.matching``); the input WCS is never modified.
+        registration_radius_arcsec: Generous radius for the registration pairs used to refine
+            the WCS (must exceed the input WCS's systematic error).
+        registration_isolation_ratio: A registration pair is kept only if the second-nearest
+            eligible catalogue star is at least this many times farther than the nearest.
+        refine_sip_degree: SIP distortion degree of the refined WCS (``None``: plain TAN).
+        refine_min_pairs: Minimum registration pairs needed to refine; otherwise the input WCS
+            is used and a warning is recorded.
+        refine_clip_sigma: Registration pairs whose residual exceeds this many per-axis
+            sigma (robust, from the Rayleigh-distributed residual magnitudes) are discarded
+            and the fit repeated. 4 sigma discards ~0.03% of correct pairs.
+        edge_margin_px: In-image filter margin: projected catalogue positions within this many
+            pixels outside the image are kept (0 = exact image bounds).
+        observation_epoch: Explicit observation date/time (ISO 8601, e.g. from an observing
+            log) used for proper-motion propagation when the image metadata has none. Never
+            inferred from a filename.
+        overlay_max_labels: Matched stars labelled with their Gaia G magnitude on the overlay.
+    """
+
+    tap_url: str = "https://gea.esac.esa.int/tap-server/tap"
+    table: str = "gaiadr3.gaia_source"
+    columns: tuple[str, ...] = GAIA_DR3_COLUMNS
+    query_margin_arcsec: float = 30.0
+    row_limit: int = 200_000
+    network_timeout_seconds: float = 120.0
+    cache_dir: str | None = None
+    refresh_cache: bool = False
+
+    match_radius_arcsec: float = 3.0
+    brightness_rank_factor: float | None = 3.0
+    refine_wcs: bool = True
+    registration_radius_arcsec: float = 12.0
+    registration_isolation_ratio: float = 2.0
+    refine_sip_degree: int | None = None
+    refine_min_pairs: int = 20
+    refine_clip_sigma: float = 4.0
+    edge_margin_px: float = 0.0
+    observation_epoch: str | None = None
+
+    overlay_max_labels: int = 20
+
+    def __post_init__(self) -> None:
+        required = {"source_id", "ra", "dec"}
+        if not required <= set(self.columns):
+            raise ConfigurationError(f"columns must include {sorted(required)}")
+        if self.query_margin_arcsec < 0:
+            raise ConfigurationError("query_margin_arcsec must be >= 0")
+        if self.row_limit < 1:
+            raise ConfigurationError(f"row_limit must be >= 1, got {self.row_limit}")
+        if not self.network_timeout_seconds > 0:
+            raise ConfigurationError("network_timeout_seconds must be positive")
+        if not self.match_radius_arcsec > 0:
+            raise ConfigurationError(
+                f"match_radius_arcsec must be positive, got {self.match_radius_arcsec}"
+            )
+        if self.brightness_rank_factor is not None and not self.brightness_rank_factor > 0:
+            raise ConfigurationError("brightness_rank_factor must be positive or None")
+        if self.edge_margin_px < 0:
+            raise ConfigurationError("edge_margin_px must be >= 0")
+        if not self.registration_radius_arcsec > 0:
+            raise ConfigurationError("registration_radius_arcsec must be positive")
+        if not self.registration_isolation_ratio >= 1:
+            raise ConfigurationError("registration_isolation_ratio must be >= 1")
+        if self.refine_sip_degree is not None and not 1 <= self.refine_sip_degree <= 5:
+            raise ConfigurationError("refine_sip_degree must be None or 1-5")
+        if self.refine_min_pairs < 6:
+            raise ConfigurationError("refine_min_pairs must be >= 6")
+        if not self.refine_clip_sigma > 0:
+            raise ConfigurationError("refine_clip_sigma must be positive")
+        if self.overlay_max_labels < 0:
+            raise ConfigurationError("overlay_max_labels must be >= 0")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable copy of the configuration."""
+        return asdict(self)
+
+
 def _check_percentiles(name: str, lower: float, upper: float) -> None:
     if not (0.0 <= lower < upper <= 100.0):
         raise ConfigurationError(

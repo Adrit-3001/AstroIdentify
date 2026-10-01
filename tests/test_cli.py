@@ -241,3 +241,81 @@ def test_solve_usage_errors(tmp_path: Path, capsys) -> None:
     with pytest.raises(SystemExit) as excinfo:
         main(["solve", str(image), "--grid", "banana"])
     assert excinfo.value.code == EXIT_USAGE
+
+
+# --------------------------------------------------------------------------- catalog-match
+
+
+@pytest.fixture
+def fake_gaia(monkeypatch, saved_products):
+    """Replace the Gaia provider used by the CLI with an offline fake for the saved field."""
+    import numpy as np
+
+    from astroidentify import cli
+    from astroidentify.catalogs.types import CatalogTable
+    from tests.catalogs.fixtures import FakeProvider
+
+    detection, wcs = saved_products["detection"], saved_products["wcs_obj"]
+    stars = [s for s in detection.sources if s.accepted]
+    ra, dec = wcs.all_pix2world([s.x for s in stars], [s.y for s in stars], 0)
+    n = len(stars)
+    rows = CatalogTable({
+        "source_id": np.arange(5000, 5000 + n, dtype=np.int64), "ra": ra, "dec": dec,
+        "ra_error": np.zeros(n), "dec_error": np.zeros(n),
+        "phot_g_mean_mag": np.linspace(10, 14, n),
+        "phot_bp_mean_mag": np.full(n, np.nan), "phot_rp_mean_mag": np.full(n, np.nan),
+        "pmra": np.zeros(n), "pmdec": np.zeros(n), "parallax": np.zeros(n),
+        "ref_epoch": np.full(n, 2016.0),
+    })  # fmt: skip
+    monkeypatch.setattr(cli, "GaiaDR3Provider", lambda config: FakeProvider(rows))
+    return saved_products
+
+
+def test_catalog_match_success(fake_gaia, tmp_path: Path, capsys) -> None:
+    p = fake_gaia
+    out = tmp_path / "cat"
+    args = ["catalog-match", str(p["image"]), "--plate-solution", str(p["plate"])]
+    assert main([*args, "--detections", str(p["sources"]), "-o", str(out), "--no-cache"]) == EXIT_OK
+    stdout = capsys.readouterr().out
+    labels = (
+        "Catalogue: Gaia DR3", "Rows returned:", "Rows in image:", "Accepted detections:",
+        "Matches:", "Median residual:", "RMS residual:", "Epoch propagation: no", "Overlay:",
+        "Summary:",
+    )  # fmt: skip
+    for label in labels:
+        assert label in stdout, label
+    assert {p.name for p in out.iterdir()} >= {
+        "catalog_query.json", "gaia_sources.csv", "catalog_matches.csv",
+        "catalog_match_summary.json", "catalog_overlay.png",
+    }  # fmt: skip
+
+
+def test_catalog_match_unsolved_plate_fails(saved_products, tmp_path: Path, capsys) -> None:
+    p = saved_products
+    plate = json.loads(p["plate"].read_text())
+    plate["solved"] = False
+    p["plate"].write_text(json.dumps(plate))
+    args = [
+        "catalog-match",
+        str(p["image"]),
+        "--plate-solution",
+        str(p["plate"]),
+        "--detections",
+        str(p["sources"]),
+    ]
+    assert main([*args, "-o", str(tmp_path / "c")]) == EXIT_ERROR
+    assert "not solved" in capsys.readouterr().err
+
+
+def test_catalog_match_usage_error(saved_products, capsys) -> None:
+    p = saved_products
+    args = [
+        "catalog-match",
+        str(p["image"]),
+        "--plate-solution",
+        str(p["plate"]),
+        "--detections",
+        str(p["sources"]),
+    ]
+    assert main([*args, "--match-radius", "-1"]) == EXIT_USAGE
+    assert "match_radius_arcsec" in capsys.readouterr().err

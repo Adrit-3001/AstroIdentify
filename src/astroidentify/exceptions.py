@@ -104,3 +104,27 @@ class SolverProcessError(AstrometryError):
 
 class InvalidWCSError(AstrometryError):
     """A WCS output is missing, malformed or not a usable celestial transform."""
+
+
+class CatalogError(AstroIdentifyError):
+    """Base class for catalogue-matching failures."""
+
+
+class InvalidPlateSolutionError(CatalogError):
+    """The plate solution/WCS input is missing, unsolved, inconsistent or numerically unsound."""
+
+
+class CatalogQueryError(CatalogError):
+    """The catalogue service failed (network error, service error, malformed response)."""
+
+
+class CatalogTimeoutError(CatalogQueryError):
+    """The catalogue query exceeded its time limit."""
+
+
+class CatalogTruncatedError(CatalogQueryError):
+    """The catalogue response hit the configured row limit (incomplete field)."""
+
+
+class InputMismatchError(CatalogError):
+    """Saved products (image, detections, plate solution) do not belong to the same image."""
