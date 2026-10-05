@@ -24,12 +24,20 @@ from astroidentify.config import (
     AstrometryConfig,
     CatalogConfig,
     DetectionConfig,
+    EvidenceConfig,
     ObjectConfig,
     PreprocessingConfig,
 )
 from astroidentify.detection.outputs import DetectionOutputPaths, save_detection_outputs
 from astroidentify.detection.pipeline import detect_sources
 from astroidentify.detection.types import DetectionResult
+from astroidentify.evidence import (
+    EvidenceOutputPaths,
+    EvidenceResult,
+    assess_evidence,
+    load_evidence_inputs,
+    save_evidence_outputs,
+)
 from astroidentify.exceptions import AstroIdentifyError, ConfigurationError
 from astroidentify.logging import configure_logging
 from astroidentify.objects import (
@@ -57,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="AstroIdentify astronomical image analysis "
         "(Milestone 1: preprocessing, Milestone 2: source detection, "
         "Milestone 3: blind plate solving, Milestone 4: catalogue matching, "
-        "Milestone 5: object identification).",
+        "Milestone 5: object identification, Milestone 6: evidence assessment).",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -357,6 +365,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="objects labelled on the overlay (default: %(default)s)",
     )
     _add_verbose(ident)
+
+    evidence_defaults = EvidenceConfig()
+    assess = commands.add_parser(
+        "assess",
+        help="assess the evidence for identified objects (support levels, not probabilities)",
+        description="Turn saved Milestone 2-5 measurements into a deterministic, explainable "
+        "support level per identified object. No network access. Support levels are not "
+        "probabilities.",
+    )
+    assess.add_argument("input", type=Path, help="the image the products were made from")
+    assess.add_argument("--objects", type=Path, required=True, help="Milestone 5 output directory")
+    assess.add_argument(
+        "--catalog", type=Path, help="Milestone 4 output directory (default: from --objects)"
+    )
+    assess.add_argument(
+        "--astrometry", type=Path, help="Milestone 3 output directory (default: from --objects)"
+    )
+    assess.add_argument(
+        "--detections",
+        type=Path,
+        help="Milestone 2 output directory or sources.json (default: from --objects)",
+    )
+    assess.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="output directory (default: outputs/<image name>-evidence)",
+    )
+    assess.add_argument(
+        "--max-objects",
+        type=int,
+        default=evidence_defaults.overlay_max_objects,
+        help="objects drawn on the overlay (default: %(default)s)",
+    )
+    assess.add_argument(
+        "--max-labels",
+        type=int,
+        default=evidence_defaults.overlay_max_labels,
+        help="objects labelled on the overlay (default: %(default)s)",
+    )
+    _add_verbose(assess)
     return parser
 
 
@@ -390,6 +439,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_catalog_match(args)
     if args.command == "identify":
         return _run_identify(args)
+    if args.command == "assess":
+        return _run_assess(args)
     return _run_preprocess(args)
 
 
@@ -618,6 +669,61 @@ def format_identify_summary(
     lines += [
         f"Objects: {paths.objects_csv}",
         f"Associations: {paths.associations}",
+        f"Overlay: {paths.overlay}",
+        f"Summary: {paths.summary}",
+    ]
+    if result.warnings:
+        lines.append(f"Warnings: {'; '.join(result.warnings)}")
+    return "\n".join(lines)
+
+
+def _run_assess(args: argparse.Namespace) -> int:
+    try:
+        config = EvidenceConfig(
+            overlay_max_objects=args.max_objects, overlay_max_labels=args.max_labels
+        )
+    except ConfigurationError as exc:
+        _error(exc)
+        return EXIT_USAGE
+    output_dir = args.output
+    if output_dir is None:
+        base = default_output_dir(args.input)
+        output_dir = base.with_name(f"{base.name}-evidence")
+    try:
+        inputs = load_evidence_inputs(
+            args.input,
+            args.objects,
+            catalog_dir=args.catalog,
+            astrometry_dir=args.astrometry,
+            detections=args.detections,
+        )
+        result = assess_evidence(inputs, config)
+        paths = save_evidence_outputs(result, inputs.image, output_dir, config, inputs.footprints())
+    except AstroIdentifyError as exc:
+        _error(exc)
+        return EXIT_ERROR
+    print(format_assess_summary(result, paths))
+    return EXIT_OK
+
+
+def format_assess_summary(result: EvidenceResult, paths: EvidenceOutputPaths) -> str:
+    """Counts by support level and the best-supported objects (no probabilities)."""
+    a = result.field_astrometry
+    counts = result.counts()
+    lines = [
+        f"Objects assessed: {len(result.objects)}",
+        "Support levels (not probabilities): "
+        + ", ".join(f"{level} {n}" for level, n in counts.items()),
+        f"Field astrometry: {a.grade}"
+        + (f" (r50 {a.r50_px:.2f} px, {a.r50_source})" if a.r50_px is not None else ""),
+    ]
+    ranked = [o for o in result.objects if o.support_level in ("strong", "moderate")]
+    for obj in ranked[:10]:
+        lines.append(
+            f"  {obj.display_name}: {obj.support_level} - {', '.join(obj.reason_codes[:6])}"
+        )
+    lines += [
+        f"Evidence: {paths.csv} , {paths.json}",
         f"Overlay: {paths.overlay}",
         f"Summary: {paths.summary}",
     ]

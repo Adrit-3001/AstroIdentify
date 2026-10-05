@@ -583,6 +583,138 @@ class ObjectConfig:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class EvidenceConfig:
+    """Thresholds of the Milestone 6 evidence assessment (``astroidentify.evidence``).
+
+    All values are generic (pixels, residual multiples, noise multiples or fractions); none
+    is tuned to a particular object. See the README section "Milestone 6" for justification.
+
+    Astrometry (field-level quality of the WCS used to place objects):
+        precise_min_gaia_matches, precise_max_median_residual_px: "precise" needs at least
+            this many Gaia matches and a median residual at most this.
+        adequate_min_gaia_matches, adequate_max_median_residual_px: "adequate" thresholds;
+            anything worse is "poor".
+        local_residual_matches: Gaia matches nearest to an object used for its local r50.
+        local_max_radius_fraction: The local estimate is used only if those matches lie
+            within this fraction of the image diagonal; otherwise the field value is used.
+        min_position_scale_px: Numerical floor of the positional scale r50.
+
+    Compact objects (normalized offset n = separation / r50; Rayleigh statistics):
+        close_offset: n at most this -> "close" (P = 1 - 0.5**(n**2) = 0.79 for 1.5).
+        consistent_offset: n at most this -> "consistent" (P = 0.998 for 3).
+        max_association_offset: Nearest detection beyond this n is not associated.
+        chance_strong, chance_moderate: Expected number of unrelated accepted detections
+            inside the 3 r50 consistency region; above ``chance_moderate`` a positional
+            match does not discriminate.
+        min_source_snr: Associated detections below this SNR cap support at moderate.
+
+    Extended objects (contrast c in per-pixel noise units; z = significance of the median
+    excess):
+        contrast_strong/_moderate/_weak and significance_strong/_moderate/_weak: grade gates.
+        structure_threshold_sigma: Pixels this far above the annulus median form the
+            visible structure (stars masked) whose light centroid is compared with the
+            catalogue centre.
+        structure_min_pixels: Fewer structure pixels -> offset not measured.
+        structure_centred_fraction, structure_offset_fraction: Offset / catalogue radius
+            limits for "centred" and "acceptable".
+        star_mask_fwhm: Radius (in FWHM) masked around accepted detections for the centroid.
+        visible_fraction_ok, visible_fraction_min: Footprint fractions in the image for
+            "mostly visible" and below which an off-centre object is "mostly outside".
+        placement_ok_ratio, placement_max_ratio: r50 / catalogue radius limits.
+
+    Ambiguity:
+        compact_competitor_offset, compact_indistinguishable_offset: Catalogue separations
+            (in r50) for compact competitors / indistinguishable competitors.
+        extended_size_ratio, extended_indistinguishable_fraction,
+        extended_indistinguishable_size_ratio: Extended footprints compete when their sizes
+            are within ``extended_size_ratio`` and one centre lies inside the other; they are
+            indistinguishable when centres are closer than the fraction of the smaller radius
+            and sizes within the stricter ratio.
+        severe_ambiguity_count: This many indistinguishable competitors -> abstain.
+
+    Overlay:
+        overlay_max_objects, overlay_max_labels: Drawing limits (strongest support first).
+    """
+
+    precise_min_gaia_matches: int = 20
+    precise_max_median_residual_px: float = 1.5
+    adequate_min_gaia_matches: int = 6
+    adequate_max_median_residual_px: float = 3.0
+    local_residual_matches: int = 15
+    local_max_radius_fraction: float = 0.25
+    min_position_scale_px: float = 0.5
+
+    close_offset: float = 1.5
+    consistent_offset: float = 3.0
+    max_association_offset: float = 5.0
+    chance_strong: float = 0.05
+    chance_moderate: float = 0.3
+    min_source_snr: float = 10.0
+
+    contrast_strong: float = 5.0
+    contrast_moderate: float = 2.0
+    contrast_weak: float = 0.5
+    significance_strong: float = 10.0
+    significance_moderate: float = 5.0
+    significance_weak: float = 3.0
+    structure_threshold_sigma: float = 2.0
+    structure_min_pixels: int = 10
+    structure_centred_fraction: float = 0.25
+    structure_offset_fraction: float = 0.5
+    star_mask_fwhm: float = 1.5
+    visible_fraction_ok: float = 0.5
+    visible_fraction_min: float = 0.1
+    placement_ok_ratio: float = 0.2
+    placement_max_ratio: float = 0.5
+
+    compact_competitor_offset: float = 3.0
+    compact_indistinguishable_offset: float = 1.5
+    extended_size_ratio: float = 3.0
+    extended_indistinguishable_fraction: float = 0.5
+    extended_indistinguishable_size_ratio: float = 2.0
+    severe_ambiguity_count: int = 3
+
+    overlay_max_objects: int = 40
+    overlay_max_labels: int = 25
+
+    def __post_init__(self) -> None:
+        ordered = [
+            ("close_offset <= consistent_offset <= max_association_offset",
+             self.close_offset <= self.consistent_offset <= self.max_association_offset),
+            ("contrast_weak <= contrast_moderate <= contrast_strong",
+             self.contrast_weak <= self.contrast_moderate <= self.contrast_strong),
+            ("significance_weak <= significance_moderate <= significance_strong",
+             self.significance_weak <= self.significance_moderate <= self.significance_strong),
+            ("chance_strong <= chance_moderate", self.chance_strong <= self.chance_moderate),
+            ("adequate_min_gaia_matches <= precise_min_gaia_matches",
+             self.adequate_min_gaia_matches <= self.precise_min_gaia_matches),
+            ("precise_max_median_residual_px <= adequate_max_median_residual_px",
+             self.precise_max_median_residual_px <= self.adequate_max_median_residual_px),
+            ("visible_fraction_min <= visible_fraction_ok",
+             self.visible_fraction_min <= self.visible_fraction_ok),
+            ("structure_centred_fraction <= structure_offset_fraction",
+             self.structure_centred_fraction <= self.structure_offset_fraction),
+            ("placement_ok_ratio <= placement_max_ratio",
+             self.placement_ok_ratio <= self.placement_max_ratio),
+            ("compact_indistinguishable_offset <= compact_competitor_offset",
+             self.compact_indistinguishable_offset <= self.compact_competitor_offset),
+        ]  # fmt: skip
+        for rule, ok in ordered:
+            if not ok:
+                raise ConfigurationError(f"evidence thresholds must satisfy {rule}")
+        if self.close_offset <= 0 or self.min_position_scale_px <= 0:
+            raise ConfigurationError("positional thresholds must be positive")
+        if self.local_residual_matches < 3 or self.severe_ambiguity_count < 1:
+            raise ConfigurationError("local_residual_matches >= 3, severe_ambiguity_count >= 1")
+        if self.overlay_max_objects < 0 or self.overlay_max_labels < 0:
+            raise ConfigurationError("overlay limits must be >= 0")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable copy of the configuration."""
+        return asdict(self)
+
+
 def _check_percentiles(name: str, lower: float, upper: float) -> None:
     if not (0.0 <= lower < upper <= 100.0):
         raise ConfigurationError(

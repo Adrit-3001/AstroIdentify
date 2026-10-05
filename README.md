@@ -14,13 +14,15 @@ The project is built in milestones:
 | 4. Catalogue matching (Gaia DR3) | complete |
 | 4.1 Saturated-star astrometric centroids | complete |
 | 5. Object annotation and identification (SIMBAD) | complete |
-| 6+. Confidence, ML, Solar System, API, frontend | not started |
+| 6. Evidence and confidence assessment | complete |
+| 7+. ML verification, Solar System, API, frontend | not started |
 
 With a local Astrometry.net installation, AstroIdentify determines where an unknown image
 points on the sky from its detected stars alone. It then associates the detected point sources
 with Gaia DR3 stars, and lists and annotates the catalogued non-stellar objects (nebulae,
 galaxies, clusters, ...) that the WCS places in the image. It reports catalogue presence and raw
-image measurements; calibrated confidence is a later milestone.
+image measurements, and grades each identification with a transparent, rule-based support
+level (not a probability).
 
 ## Milestone 1: what it does
 
@@ -886,6 +888,145 @@ presentation order: designation rank, then catalogued size, then reference count
 - No confidence calibration, ML verification or Solar System objects; these are later
   milestones.
 
+## Milestone 6: evidence assessment (support levels)
+
+**Purpose.** For every object Milestone 5 retained, turn the existing measurements into an
+explicit, deterministic answer to one question: how well do they support "this catalogued
+object is at this place in the image"? No network access is needed. Objects excluded by
+the Milestone 5 type policy (for example ordinary stars such as Vega) are not assessed and
+stay excluded.
+
+> **Support levels are not probabilities.** They are ordinal, rule-based summaries of
+> explicit evidence. No numeric score is produced (`evidence_score` is always null) because
+> nothing has been calibrated against ground truth.
+
+| Level | Meaning |
+| --- | --- |
+| `strong` | strong image evidence, a precise (Gaia-verified) WCS, a confirmed catalogue type, nothing truncated, no competing catalogue object |
+| `moderate` | clear image evidence, limited by one documented factor |
+| `weak` | some image evidence, or evidence limited by a serious factor |
+| `catalogue-only` | the catalogue and WCS place the object here, but the image adds no support (not visible, or not measurable). This is not contradiction |
+| `insufficient` | abstention: no astrometric statistics apply, the object is almost entirely off-frame, the ambiguity is severe, or there is no support under a poorly verified WCS |
+
+```bash
+astroidentify assess data/raw/M57__Ring_Nebula-eQuinox-20260925-003755.png \
+    --objects outputs/m57-objects --output outputs/m57-evidence
+```
+
+`--catalog`, `--astrometry` and `--detections` default to the products recorded by the
+objects run. Every product's image hash must match the input image.
+
+**Evidence groups** (`src/astroidentify/evidence/`). Each group is used once.
+
+1. **Astrometry** (`astrometry.py`).
+   - **Field grade.** precise: ≥ 20 Gaia matches with median residual ≤ 1.5 px. adequate:
+     ≥ 6 matches with median ≤ 3 px. Anything worse is poor.
+   - **Which residuals apply.** Only residual statistics that describe the WCS actually used
+     are applied:
+     - Gaia per-star residuals for the refined WCS;
+     - the input-WCS offset if the objects used the blind WCS;
+     - the plate solver's own residual (at most adequate) if there is no Gaia run;
+     - otherwise none, and every object abstains.
+   - **Positional scale r50.** This is the median radial residual of matched Gaia stars, so
+     half of all true star–detection pairs lie closer than r50. It is local (the 15 nearest
+     matches, if they lie within a quarter of the image diagonal), otherwise field-level.
+2. **Compact image evidence** (`compact.py`; objects without a size or ≤ 10″).
+   - **Normalized offset.** `n = separation / r50` to the nearest accepted detection,
+     measured from its astrometric centroid. For Rayleigh-distributed errors n ≤ 1.5 holds
+     for 79 % of true pairs ("close") and n ≤ 3 for 99.8 % ("consistent"). 3 < n ≤ 5 is
+     "poor"; beyond 5 there is no association.
+   - **Chance coincidence.** The expected number of unrelated detections inside the 3 r50
+     region (detection density × area). It must be ≤ 0.05 for strong and ≤ 0.3 for
+     moderate. A poorer WCS means a larger r50 and a higher chance expectation, so the same
+     separation earns less support.
+   - **Source-quality caps** (moderate): SNR < 10, an edge flag, or a saturated detection
+     without a calibrated centroid.
+3. **Extended image evidence** (`extended.py`). No point-source match is required, and
+   there is no segmentation or ML.
+   - **Visibility class:**
+     - mostly visible: ≥ 50 % of the footprint is in the image;
+     - truncated: caps at moderate;
+     - larger than frame: caps at moderate;
+     - mostly outside (centre off-frame and < 10 % visible): abstain.
+   - **Contrast.** `(median inside − median of a 1.5–2.5× annulus) / (1.4826 MAD)`, in
+     per-pixel noise units. It is gated by the significance of the median excess:
+
+     | Grade | contrast | significance z |
+     | --- | --- | --- |
+     | strong | ≥ 5 | ≥ 10 |
+     | moderate | ≥ 2 | ≥ 5 |
+     | weak | ≥ 0.5 | ≥ 3 |
+
+   - **Structure offset.** The light centroid of pixels > 2σ above the annulus is compared
+     with the centroid of the in-image part of the footprint, as a fraction of the radius.
+     Foreground stars are masked, except a source at the catalogue centre (a nucleus or
+     central star). An offset > 0.25 R caps at moderate; > 0.5 R caps at weak.
+   - **Placement.** `r50 / radius` > 0.2 caps at moderate; > 0.5 caps at weak.
+4. **Catalogue** evidence: a SIMBAD candidate type caps at moderate.
+5. **Ambiguity** (`ambiguity.py`).
+   - **What competes.** Compact objects whose catalogue positions lie within 3 r50 of each
+     other, and extended footprints of comparable size (radius ratio ≤ 3) with one centre
+     inside the other.
+   - **Indistinguishable** competitors are compact objects within 1.5 r50, or extended
+     objects with nearly coincident centres and similar sizes.
+   - **Severity caps:** minor → moderate, major → weak, ≥ 3 indistinguishable → abstain.
+   - **Nested objects** are recorded as context, not competition (`CONTAINS_SUBSTRUCTURE` /
+     `WITHIN_LARGER_OBJECT`). An H II region inside a galaxy does not compete with it.
+   - No winner is chosen.
+
+**Aggregation** (`scoring.py`). Image grade → base level, then every applicable cap lowers
+it to the weakest level. Caps only ever lower a level, so a smaller offset, a higher contrast,
+a better WCS or less ambiguity never reduce support (all tested).
+
+**Not scored, to avoid double counting or priors:**
+- Gaia RMS (correlated with the median used);
+- the plate-solver residual when Gaia applies;
+- the Milestone 5 point-match radius (replaced by the normalized offset);
+- detections inside extended footprints (dominated by foreground stars);
+- a detection's own Gaia match (it cannot tell a compact galaxy from a star);
+- designation rank, reference counts and other popularity priors.
+
+**Missing data.** Missing size, epoch, detections, local residuals, contrast or structure
+position stays `null` with a `MISSING_*`/`*_UNAVAILABLE` code, listed in `missing`. It is
+never converted into negative evidence. For example, a missing epoch is reported, not
+penalized.
+
+**Outputs** (`outputs/<name>-evidence/`):
+
+```text
+object_evidence.csv     one row per assessed object: level, grades, key raw/normalized features,
+                        ambiguity, caps, missing fields, reason codes, explanation
+object_evidence.json    full versioned records (evidence_version 6.0) incl. provenance
+evidence_summary.json   counts by level/path/ambiguity, field astrometry, reason-code glossary,
+                        config, warnings
+evidence_overlay.png    retained objects coloured by support level (image dimensions unchanged)
+```
+
+**Benchmark** (M57 field):
+- **Counts:** 21 objects assessed: 1 strong, 1 moderate, 3 weak, 15 catalogue-only, 1
+  insufficient.
+- **The central planetary nebula (M 57) is `strong`.** It rests on a precise WCS (630 Gaia
+  matches, local r50 0.92 px), a footprint contrast of 37.5σ (z ≈ 1900), 100 % of the
+  extent visible, structure centred to 0.02 radius, and no competitors.
+- **IC 1296 is `moderate`** (contrast 2.8σ, centred).
+- **Faint LEDA/2MASX/WISE galaxies** are `catalogue-only`.
+- **The 2° cluster** whose centre lies off-frame abstains.
+
+**Limitations.**
+- **Thresholds.** They are generic and documented in `EvidenceConfig`, but they are not
+  calibrated against labelled data, so levels are not probabilities.
+- **Objects larger than the frame** (e.g. a large galaxy filling the image) have no
+  surrounding annulus. Their contrast is unavailable and they cannot rise above
+  `catalogue-only` on image grounds.
+- **Contrast** is a simple local statistic. Gradients, scattered light and crowded star
+  fields can affect it.
+- **Positional scale.** r50 uses Gaia stars and therefore assumes catalogue positions of
+  compact objects are as accurate as Gaia's. SIMBAD coordinate errors are not available
+  and are not invented.
+- **Ambiguity** uses catalogue geometry only. Two catalogue entries for the same physical
+  object are reported as competitors.
+- **Not in scope here:** ML/CV verification (Milestone 7).
+
 ## Development
 
 ```bash
@@ -960,7 +1101,7 @@ src/astroidentify/
 3. **Astrometric plate solving / WCS** (done; needs local Astrometry.net + index data)
 4. **Catalogue matching** (done: Gaia DR3; 4.1 saturated-star astrometric centroids)
 5. **Annotation and identification** (done: SIMBAD)
-6. Evidence/confidence estimation
+6. **Evidence/confidence estimation** (done: rule-based support levels, not probabilities)
 7. CV/ML verification
 8. Solar-system objects
 9. FastAPI backend
