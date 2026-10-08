@@ -15,6 +15,7 @@ The project is built in milestones:
 | 4.1 Saturated-star astrometric centroids | complete |
 | 5. Object annotation and identification (SIMBAD) | complete |
 | 6. Evidence and confidence assessment | complete |
+| 6.1 Object inspection / field visualization | complete |
 | 7+. ML verification, Solar System, API, frontend | not started |
 
 With a local Astrometry.net installation, AstroIdentify determines where an unknown image
@@ -1026,6 +1027,119 @@ evidence_overlay.png    retained objects coloured by support level (image dimens
 - **Ambiguity** uses catalogue geometry only. Two catalogue entries for the same physical
   object are reported as competitors.
 - **Not in scope here:** ML/CV verification (Milestone 7).
+
+## Milestone 6.1: object inspection (display only)
+
+**Purpose.** Diffuse objects can be hard to see in a raw frame even when they are correctly
+identified. `inspect-object` takes one object that Milestone 5 already identified and draws
+a stretched view showing exactly where it lies. It does not change any scientific result.
+
+```bash
+astroidentify inspect-object data/raw/test_field_03.png \
+    --objects outputs/test-field-03-objects \
+    --catalog outputs/test-field-03-catalog \
+    --object "NGC 7000" \
+    --output outputs/test-field-03-ngc7000
+```
+
+| Option | Effect |
+| --- | --- |
+| `--object NAME` | **post-identification selector only** (see below) |
+| `--stretch none\|percentile\|asinh` | display stretch (default `asinh`) |
+| `--low-percentile P` | black point (default 10) |
+| `--high-percentile P` | white point (default 99.9) |
+| `--softening A` | asinh softening (default 0.05; smaller lifts faint structure more) |
+| `--reference-stars N` | brightest Gaia stars drawn as landmarks (default 15; 0 = none) |
+| `--label-reference-stars` | also label unnamed landmarks with their G magnitude |
+
+**Selection.**
+- **What is searched.** `--object` is matched only against saved Milestone 5 rows, in tiers:
+  display name, then SIMBAD main ID, then aliases (including common names such as
+  "North America Nebula").
+- **How matching works.**
+  - It is exact apart from case and repeated spaces, with no fuzzy matching.
+  - Several objects matching in the same tier is an error that lists them.
+- **Excluded rows.**
+  - Identified (retained) objects are searched first.
+  - Only if none matches can an explicit request select a row that Milestone 5 placed in the
+    image but excluded by its type policy (`in_field_type_excluded`, e.g. a named star such
+    as `--object "Albireo"`).
+  - The summary records the row's Milestone 5 status and exclusion reason, and that it was
+    explicitly selected. The image carries a note to the same effect.
+  - Milestone 5 filtering and every normal overlay stay unchanged, and rows outside the
+    image cannot be selected.
+- **Isolation.** The name never reaches detection, plate solving, catalogue queries or
+  evidence grading.
+
+**Display-only stretch** (`inspection/stretch.py`).
+- **What it touches.** The scientific pipeline never imports this module, which a test
+  enforces. Output PNGs have the image's exact dimensions, with no resampling or warping.
+  The zoom view only enlarges by an integer factor (pixel replication).
+- **Modes.**
+  - `none`: 8-bit data shown exactly as stored.
+  - `percentile`: linear between two percentiles of all channels.
+  - `asinh`: Lupton-style and colour-preserving. Luminance is stretched and every channel is
+    scaled by the same factor, so star colours are kept.
+- **Recording.** Levels and parameters are written to `inspection_summary.json`.
+
+**What is drawn.**
+- **The object.** The catalogue centre is projected through the same WCS Milestone 5 used
+  (canonical 0-based pixels, no `+1`) and drawn as a magenta open crosshair.
+- **The label.** If SIMBAD lists a common name (`NAME` identifier), the label shows it first,
+  with the catalogue designation underneath: the display name, plus the main ID if different.
+  When there are several common names, mixed-case ones win over all-capitals abbreviations,
+  then the most complete (longest), then SIMBAD's order. Without a common name the label is
+  the designation over the SIMBAD type. This is presentation only: the stored identity, type
+  and naming are unchanged, and the type stays in `inspection_summary.json`.
+- **Map aids.** A scale bar, and north/east arrows computed from the WCS (never assumed).
+- **Two views.** A full-frame view and a zoom.
+- **Extent:**
+  - **Catalogued ellipse inside the frame:** the projected outline is drawn, and the zoom
+    covers it with a 1.5× margin.
+  - **Ellipse crossing the frame edge:** only the visible arcs are drawn, and the summary
+    records that the object extends beyond the image.
+  - **Ellipse containing the whole frame:** nothing is drawn, so no misleading boundary
+    appears inside the image.
+  - **No catalogued size:** only the centre marker. The image and summary say explicitly that
+    no boundary is claimed (`extent_available: false`). The zoom is then a fixed contextual
+    crop, labelled as not a measured object boundary.
+- **Reference stars.**
+  - **Which stars.** The brightest Gaia DR3 stars (by G) from Milestone 4's
+    `gaia_sources.csv`, projected through the same WCS. They are landmarks, not evidence.
+    The zoom only uses stars at most 3 mag fainter than the full view's faintest landmark.
+  - **Names.** Only names already in the saved SIMBAD star rows are used (common name,
+    Bayer/Flamsteed, variable-star name, HD or HIP). Gaia positions are moved back to
+    SIMBAD's J2000 epoch with their proper motions for this lookup only.
+
+**Outputs:** `inspection_full.png`, `inspection_zoom.png` and `inspection_summary.json`. The
+summary records:
+- input image hash;
+- the selected object and how it was selected;
+- aliases, type, RA/Dec and projected x/y (re-projection checked);
+- WCS path and SHA;
+- extent metadata and visible fraction;
+- stretch parameters and levels;
+- reference stars;
+- crop bounds and zoom mapping;
+- warnings.
+
+Input artifacts are never modified, and writing into an input directory is refused.
+
+**Example: the North America Nebula field.**
+- **The row.** NGC 7000 is the SIMBAD row Milestone 5 identified (typed `Cl*`, "Cluster of
+  Stars", via its Bermuda Cluster designation). Its aliases include SH 2-117, LBN 373 and
+  the common name "North America Nebula".
+- **No size.** The row carries no angular size, so the view shows the exact catalogue
+  centre and states that no boundary is known from this row.
+- **Field coverage.** This 36′ × 27′ frame lies well inside the nebula's roughly 2° region,
+  so its glow appears as broad background structure, not as a bounded shape.
+
+**Limitations.**
+- **No invented outlines.** Catalogue extents are drawn only when SIMBAD provides them, and
+  many large diffuse nebulae have no reliable size or orientation there.
+- **Only a visual aid.** A stretch cannot separate faint nebulosity from gradients or
+  background, and 8-bit quantization limits how much faint signal can be lifted.
+- **Landmark names.** These depend on which star rows the Milestone 5 SIMBAD query returned.
 
 ## Development
 

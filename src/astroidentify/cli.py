@@ -39,6 +39,13 @@ from astroidentify.evidence import (
     save_evidence_outputs,
 )
 from astroidentify.exceptions import AstroIdentifyError, ConfigurationError
+from astroidentify.inspection import (
+    STRETCHES,
+    InspectionOptions,
+    InspectionResult,
+    StretchParameters,
+    inspect_object,
+)
 from astroidentify.logging import configure_logging
 from astroidentify.objects import (
     ObjectOutputPaths,
@@ -65,7 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="AstroIdentify astronomical image analysis "
         "(Milestone 1: preprocessing, Milestone 2: source detection, "
         "Milestone 3: blind plate solving, Milestone 4: catalogue matching, "
-        "Milestone 5: object identification, Milestone 6: evidence assessment).",
+        "Milestone 5: object identification, Milestone 6: evidence assessment, "
+        "Milestone 6.1: object inspection).",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -406,6 +414,65 @@ def build_parser() -> argparse.ArgumentParser:
         help="objects labelled on the overlay (default: %(default)s)",
     )
     _add_verbose(assess)
+
+    stretch_defaults = StretchParameters()
+    inspect = commands.add_parser(
+        "inspect-object",
+        help="display-only inspection view of an already-identified object",
+        description="Render a stretched full-frame view and a zoom showing where a Milestone 5 "
+        "object lies (catalogue centre, catalogued extent if reliable, bright reference stars). "
+        "The name only selects a saved row; nothing scientific is recomputed.",
+    )
+    inspect.add_argument("input", type=Path, help="the image the products were made from")
+    inspect.add_argument("--objects", type=Path, required=True, help="Milestone 5 output directory")
+    inspect.add_argument(
+        "--object",
+        required=True,
+        help="display name, SIMBAD main ID or alias of an identified object (exact; case and "
+        "spacing ignored)",
+    )
+    inspect.add_argument(
+        "--catalog", type=Path, help="Milestone 4 output directory (default: from --objects)"
+    )
+    inspect.add_argument(
+        "-o", "--output", type=Path, help="output directory (default: outputs/<image>-inspection)"
+    )
+    inspect.add_argument(
+        "--stretch",
+        choices=STRETCHES,
+        default=stretch_defaults.mode,
+        help="display-only stretch (default: %(default)s)",
+    )
+    inspect.add_argument(
+        "--low-percentile",
+        type=float,
+        default=stretch_defaults.low_percentile,
+        help="black-point percentile (default: %(default)s)",
+    )
+    inspect.add_argument(
+        "--high-percentile",
+        type=float,
+        default=stretch_defaults.high_percentile,
+        help="white-point percentile (default: %(default)s)",
+    )
+    inspect.add_argument(
+        "--softening",
+        type=float,
+        default=stretch_defaults.softening,
+        help="asinh softening; smaller lifts faint structure more (default: %(default)s)",
+    )
+    inspect.add_argument(
+        "--reference-stars",
+        type=int,
+        default=InspectionOptions().reference_stars,
+        help="brightest Gaia stars shown as landmarks; 0 = none (default: %(default)s)",
+    )
+    inspect.add_argument(
+        "--label-reference-stars",
+        action="store_true",
+        help="label unnamed reference stars with their Gaia G magnitude",
+    )
+    _add_verbose(inspect)
     return parser
 
 
@@ -441,6 +508,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_identify(args)
     if args.command == "assess":
         return _run_assess(args)
+    if args.command == "inspect-object":
+        return _run_inspect(args)
     return _run_preprocess(args)
 
 
@@ -569,9 +638,14 @@ def _run_catalog_match(args: argparse.Namespace) -> int:
     try:
         inputs = load_match_inputs(args.input, args.plate_solution, wcs_path, args.detections)
         result = match_catalog(
-            inputs.sources, inputs.wcs, inputs.width, inputs.height,
-            GaiaDR3Provider(config), config, inputs.image.metadata,
-        )  # fmt: skip
+            inputs.sources,
+            inputs.wcs,
+            inputs.width,
+            inputs.height,
+            GaiaDR3Provider(config),
+            config,
+            inputs.image.metadata,
+        )
         paths = save_catalog_outputs(result, inputs.image, output_dir, config, inputs.provenance)
     except ConfigurationError as exc:
         _error(exc)
@@ -613,9 +687,15 @@ def _run_identify(args: argparse.Namespace) -> int:
             detections_path=args.detections,
         )
         result = identify_objects(
-            inputs.wcs, inputs.width, inputs.height, SimbadProvider(config), config,
-            inputs.detections, inputs.plane, inputs.wcs_choice,
-        )  # fmt: skip
+            inputs.wcs,
+            inputs.width,
+            inputs.height,
+            SimbadProvider(config),
+            config,
+            inputs.detections,
+            inputs.plane,
+            inputs.wcs_choice,
+        )
         paths, report = save_object_outputs(
             result, inputs.image, output_dir, config, inputs.provenance
         )
@@ -729,6 +809,66 @@ def format_assess_summary(result: EvidenceResult, paths: EvidenceOutputPaths) ->
     ]
     if result.warnings:
         lines.append(f"Warnings: {'; '.join(result.warnings)}")
+    return "\n".join(lines)
+
+
+def _run_inspect(args: argparse.Namespace) -> int:
+    try:
+        options = InspectionOptions(
+            stretch=StretchParameters(
+                args.stretch, args.low_percentile, args.high_percentile, args.softening
+            ),
+            reference_stars=max(0, args.reference_stars),
+            label_reference_stars=args.label_reference_stars,
+        )
+    except ValueError as exc:
+        _error(exc)
+        return EXIT_USAGE
+    output_dir = args.output
+    if output_dir is None:
+        base = default_output_dir(args.input)
+        output_dir = base.with_name(f"{base.name}-inspection")
+    try:
+        result = inspect_object(
+            args.input,
+            args.objects,
+            args.object,
+            output_dir,
+            catalog_dir=args.catalog,
+            options=options,
+        )
+    except AstroIdentifyError as exc:
+        _error(exc)
+        return EXIT_ERROR
+    print(format_inspect_summary(result))
+    return EXIT_OK
+
+
+def format_inspect_summary(result: InspectionResult) -> str:
+    s = result.summary
+    o = s["object"]
+    e = s["extent"]
+    kind = o["object_type_description"] or o["object_type"]
+    if e["extent_available"]:
+        extent = f"{e['major_arcmin']:.3g}' ({e['shape']}); {e['drawn']}"
+    else:
+        extent = "not available (catalogue centre only; no boundary drawn)"
+    x0, y0, x1, y1 = result.crop
+    lines = [
+        f"Selected: {o['display_name']} [{o['main_id']}] ({kind}) by {s['selection']['method']}",
+        f"Label: {s['label']['primary']} / {s['label']['secondary']}",
+        f"Catalogue centre: RA {o['ra_deg']:.5f} Dec {o['dec_deg']:+.5f} -> pixel "
+        f"({o['projected_x']:.1f}, {o['projected_y']:.1f})",
+        f"Extent: {extent}",
+        f"Stretch: {s['stretch']['mode']} (display only)",
+        f"Reference stars: {len(result.stars_full)} full view, {len(result.stars_zoom)} zoom",
+        f"Zoom crop: x {x0}-{x1 - 1}, y {y0}-{y1 - 1} (x{result.zoom})",
+        f"Full view: {result.paths['full']}",
+        f"Zoom: {result.paths['zoom']}",
+        f"Summary: {result.paths['summary']}",
+    ]
+    if s["warnings"]:
+        lines.append("Warnings: " + "; ".join(s["warnings"]))
     return "\n".join(lines)
 
 
