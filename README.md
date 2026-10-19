@@ -25,6 +25,36 @@ galaxies, clusters, ...) that the WCS places in the image. It reports catalogue 
 image measurements, and grades each identification with a transparent, rule-based support
 level (not a probability).
 
+## Quick start: process an image with one run file
+
+Instead of running `detect`, `solve`, `catalog-match`, `identify`, `assess` and
+`inspect-object` one by one, put everything in a TOML file and run it once:
+
+```bash
+cp astroidentify.example.toml my-image.toml   # edit image, name and any options
+astroidentify run my-image.toml --dry-run     # show the commands it will run
+astroidentify run my-image.toml               # run them
+```
+
+- **Top-level keys:**
+  - `image` (required);
+  - `name`: output prefix, default the image file name;
+  - `output_root`: default `outputs`;
+  - `steps`: default detect → solve → catalog-match → identify → assess, plus
+    `inspect-object` when it names an object;
+  - `verbose`.
+- **Step sections.** Each `[step]` section takes that command's normal options:
+  `detection_sigma = 4` means `--detection-sigma 4`, `no_cache = true` means `--no-cache`,
+  and a missing key keeps the default. `astroidentify <step> --help` lists the options. An
+  unknown option stops the run with that command's own error message.
+- **Wiring.** Outputs go to `<output_root>/<name>-detection`, `-astrometry`, `-catalog`,
+  `-objects`, `-evidence` and `-inspect-<object>`. Each step is given the previous steps'
+  outputs automatically, and an explicit path in a section overrides that.
+- **Partial runs.** Steps whose inputs already exist can run on their own, e.g.
+  `steps = ["inspect-object"]` with `object = ["NGC 7000", "Albireo"]`.
+- **Failures.** Steps always run in pipeline order and the run stops at the first failing
+  step.
+
 ## Milestone 1: what it does
 
 Given a `.jpg`/`.jpeg`, `.png` or `.fits` image, one command:

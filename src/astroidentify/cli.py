@@ -473,6 +473,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="label unnamed reference stars with their Gaia G magnitude",
     )
     _add_verbose(inspect)
+
+    run_parser = commands.add_parser(
+        "run",
+        help="run several steps from one TOML file (see astroidentify.example.toml)",
+        description="Run the pipeline steps listed in a TOML run file. Each [step] section holds "
+        "that command's normal options; outputs are wired from step to step automatically.",
+    )
+    run_parser.add_argument("config", type=Path, help="TOML run file")
+    run_parser.add_argument(
+        "--dry-run", action="store_true", help="print the commands without running them"
+    )
+    _add_verbose(run_parser)
     return parser
 
 
@@ -510,6 +522,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_assess(args)
     if args.command == "inspect-object":
         return _run_inspect(args)
+    if args.command == "run":
+        return _run_file(args)
     return _run_preprocess(args)
 
 
@@ -810,6 +824,16 @@ def format_assess_summary(result: EvidenceResult, paths: EvidenceOutputPaths) ->
     if result.warnings:
         lines.append(f"Warnings: {'; '.join(result.warnings)}")
     return "\n".join(lines)
+
+
+def _run_file(args: argparse.Namespace) -> int:
+    from astroidentify.runfile import run
+
+    try:
+        return run(args.config, dry_run=args.dry_run)
+    except ConfigurationError as exc:
+        _error(exc)
+        return EXIT_USAGE
 
 
 def _run_inspect(args: argparse.Namespace) -> int:

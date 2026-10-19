@@ -1,0 +1,52 @@
+# AstroIdentify run file: process one image with a single command.
+#
+#   astroidentify run astroidentify.example.toml            # run every listed step
+#   astroidentify run astroidentify.example.toml --dry-run  # only print the commands
+#
+# Copy this file, edit it, and run it. Each [step] section accepts that command's normal
+# options (see `astroidentify <step> --help`): write `detection_sigma = 4` for
+# `--detection-sigma 4`, `no_cache = true` for the flag `--no-cache`. Leave a key out to
+# keep the default. Outputs go to <output_root>/<name>-<step> and are passed from step to
+# step automatically.
+
+image = "data/raw/test_field_03.png"
+name = "test-field-03"        # output prefix (default: the image file name)
+output_root = "outputs"
+verbose = 0                   # 1 or 2 for more log output
+
+# Steps run in pipeline order. Steps whose inputs already exist on disk can be run alone,
+# e.g. steps = ["inspect-object"] to look at another object without re-solving.
+steps = ["detect", "solve", "catalog-match", "identify", "assess", "inspect-object"]
+
+[detect]
+# detection_sigma = 5.0
+# min_snr = 5.0
+# fwhm = 9.0                  # pixels; omit to estimate
+# box_size = 64
+
+[solve]
+# timeout = 300               # seconds per attempt
+# total_timeout = 900
+# scale_low = 0.5             # arcsec/pixel bounds from your camera (optional)
+# scale_high = 1.2
+# max_sources = 100
+
+[catalog-match]
+# match_radius = 3.0          # arcsec
+# observation_date = "2026-09-25T00:37:55"
+# no_cache = true
+
+[identify]
+# max_objects = 40
+# max_labels = 25
+# offline = true              # only use cached SIMBAD results
+
+[assess]
+# max_objects = 40
+
+[inspect-object]
+object = "NGC 7000"           # or a list: ["NGC 7000", "Albireo"]
+# stretch = "asinh"           # none | percentile | asinh
+# softening = 0.05
+# reference_stars = 15
+# label_reference_stars = true
