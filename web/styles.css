@@ -1,0 +1,283 @@
+/* AstroIdentify landing page. Scene and motion settings live in src/config.js, not here. */
+
+:root {
+  --bg: #020308;
+  --text: #eef1f8;
+  --text-muted: #a3acc2;
+  --text-faint: #6f7891;
+  --accent: #b9c8ff;
+  --line: rgba(185, 200, 255, 0.16);
+  --panel: rgba(8, 11, 24, 0.72);
+  --gutter: clamp(16px, 5vw, 72px);
+  --font-display: 'Inter Display', 'SF Pro Display', 'Segoe UI Variable Display', 'Inter',
+    system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-body: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* ---- Scene layers (fixed behind the content) ---- */
+
+.sky,
+.quiet-zone,
+.vignette {
+  position: fixed;
+  inset: 0 0 auto 0;
+  width: 100%;
+  /* Largest viewport height: mobile browser bars appearing/disappearing don't resize the sky. */
+  height: 100vh;
+  height: 100lvh;
+  pointer-events: none;
+}
+.sky {
+  display: block;
+  background: var(--bg);
+}
+.quiet-zone {
+  --qx: 27%;
+  --qy: 50%;
+  --qrx: 34%;
+  --qry: 42%;
+  opacity: 0;
+  background: radial-gradient(var(--qrx) var(--qry) at var(--qx) var(--qy),
+      rgba(1, 2, 7, 0.9) 0%, rgba(1, 2, 7, 0.55) 45%, rgba(1, 2, 7, 0) 100%);
+}
+.vignette {
+  background: radial-gradient(120% 90% at 50% 45%, transparent 55%, rgba(0, 0, 3, 0.55) 100%);
+}
+
+/* ---- Comet-intro wordmark ---- */
+
+.intro-mark {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  pointer-events: none;
+  z-index: 1;
+}
+/* Only while the opening plays (the head script sets .is-opening before first paint). */
+.is-opening .intro-mark { display: flex; }
+.intro-mark[hidden] { display: none; }
+.intro-mark span {
+  font-family: var(--font-display);
+  font-size: clamp(2.3rem, 7vw, 4.75rem);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.035em;
+  color: #f6f7fc;
+  text-shadow: 0 0 32px rgba(150, 170, 255, 0.16);
+}
+@media (prefers-reduced-motion: reduce) {
+  .intro-mark { display: none !important; }
+}
+
+main { position: relative; z-index: 2; }
+
+/* ---- Hero ---- */
+
+.hero {
+  min-height: 100vh;
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+  padding: max(24px, env(safe-area-inset-top)) var(--gutter) 12vh;
+}
+.hero__content {
+  max-width: 36rem;
+  margin-left: clamp(0px, 3vw, 48px);
+}
+/* Until the script picks the layout, keep the hero hidden to avoid a layout jump. */
+:root:not([data-layout]) .hero__content { visibility: hidden; }
+
+[data-layout='narrow'] .hero {
+  align-items: flex-end;
+  padding-bottom: max(14svh, env(safe-area-inset-bottom));
+}
+[data-layout='narrow'] .hero__content {
+  margin: 0 auto;
+  text-align: center;
+}
+
+.hero__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(2.6rem, 11vw, 7rem);
+  font-weight: 600;
+  line-height: 0.98;
+  letter-spacing: -0.035em;
+  color: #f6f7fc;
+  text-shadow: 0 0 40px rgba(150, 170, 255, 0.18);
+}
+[data-layout='wide'] .hero__title { font-size: clamp(3rem, 7.2vw, 7rem); }
+
+.hero__tagline {
+  margin: 0.9rem 0 0;
+  font-size: clamp(1.08rem, 1.9vw, 1.45rem);
+  line-height: 1.4;
+  color: #c9d0e2;
+  max-width: 26em;
+}
+[data-layout='narrow'] .hero__tagline { margin-inline: auto; }
+
+.hero__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55em;
+  margin-top: 2rem;
+  padding: 0.8em 1.35em 0.8em 1.5em;
+  border: 1px solid rgba(200, 212, 255, 0.34);
+  border-radius: 999px;
+  background: rgba(14, 18, 36, 0.55);
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  text-decoration: none;
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+.hero__action svg { opacity: 0.8; }
+.hero__action:hover {
+  background: rgba(40, 50, 90, 0.6);
+  border-color: rgba(210, 220, 255, 0.6);
+}
+.hero__action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* While the opening plays, text waits for the timeline (inline styles take over from here). */
+.is-opening [data-reveal] { opacity: 0; }
+
+/* ---- How it works ---- */
+
+.how {
+  position: relative;
+  padding: clamp(72px, 12vh, 140px) var(--gutter) clamp(64px, 10vh, 120px);
+  background: linear-gradient(to bottom, rgba(2, 3, 8, 0) 0, rgba(2, 3, 8, 0.86) 140px,
+      rgba(2, 3, 8, 0.94) 100%);
+}
+.how__inner {
+  max-width: 1040px;
+  margin: 0 auto;
+}
+.how__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(1.9rem, 4vw, 2.8rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.how__lede {
+  margin: 1rem 0 0;
+  max-width: 44em;
+  color: var(--text-muted);
+  font-size: 1.08rem;
+}
+
+.steps {
+  list-style: none;
+  counter-reset: step;
+  margin: 2.75rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
+  gap: 1px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--line);
+}
+.step {
+  counter-increment: step;
+  padding: 1.4rem 1.5rem 1.5rem;
+  background: rgba(6, 8, 18, 0.96);
+}
+.step::before {
+  content: counter(step, decimal-leading-zero);
+  display: block;
+  margin-bottom: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+.step h3 {
+  margin: 0;
+  font-size: 1.06rem;
+  font-weight: 600;
+}
+.step p {
+  margin: 0.4rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.96rem;
+}
+
+.how__extra {
+  margin-top: 1.5rem;
+  padding: 1.1rem 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(6, 8, 18, 0.9);
+  color: var(--text-muted);
+}
+.how__extra p { margin: 0; }
+.how__extra strong { color: var(--text); font-weight: 600; }
+
+.run { margin-top: 3rem; }
+.run__title {
+  margin: 0 0 0.9rem;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+.run__code {
+  margin: 0;
+  padding: 1.1rem 1.3rem;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(3, 4, 10, 0.95);
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  line-height: 1.75;
+  color: #dfe5f5;
+}
+.run__prompt {
+  color: var(--text-faint);
+  user-select: none;
+}
+.run__note {
+  margin: 0.9rem 0 0;
+  max-width: 52em;
+  color: var(--text-faint);
+  font-size: 0.92rem;
+}
+
+@media (max-width: 520px) {
+  .step { padding: 1.2rem 1.15rem 1.3rem; }
+  .how__extra { padding: 1rem 1.15rem; }
+}

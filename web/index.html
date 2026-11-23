@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>AstroIdentify</title>
+    <meta
+      name="description"
+      content="AstroIdentify works out where a telescope image points and which catalogued galaxies, nebulae and clusters are in it."
+    />
+    <meta name="theme-color" content="#020308" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23050814'/%3E%3Ccircle cx='16' cy='16' r='3.2' fill='%23eef2ff'/%3E%3Cpath d='M16 5v6M16 21v6M5 16h6M21 16h6' stroke='%23aab8ff' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <script>
+      // Before first paint: hide the hero text only if the opening will play. If the scene
+      // script never starts (blocked, failed), show everything after a short grace period.
+      (function () {
+        var root = document.documentElement;
+        if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          root.classList.add('is-opening');
+        }
+        setTimeout(function () {
+          if (!window.__landing) {
+            root.classList.remove('is-opening');
+            root.dataset.layout = root.dataset.layout || 'wide';
+          }
+        }, 3000);
+      })();
+    </script>
+    <noscript>
+      <style>
+        .hero__content { visibility: visible !important; }
+      </style>
+    </noscript>
+    <script type="module" src="src/main.js"></script>
+  </head>
+  <body>
+    <canvas id="sky" class="sky" aria-hidden="true"></canvas>
+    <div class="quiet-zone" aria-hidden="true"></div>
+    <div class="vignette" aria-hidden="true"></div>
+    <!-- Comet-intro wordmark: painted with the page (no script needed), faded by the timeline.
+         Hidden from assistive tech because the hero <h1> carries the same name. -->
+    <div class="intro-mark" aria-hidden="true"><span>AstroIdentify</span></div>
+
+    <main>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero__content">
+          <h1 id="hero-title" class="hero__title" data-reveal="0">AstroIdentify</h1>
+          <p class="hero__tagline" data-reveal="1">Find out what’s in your telescope images.</p>
+          <a class="hero__action" href="#how-it-works" data-reveal="2">
+            How it works
+            <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16">
+              <path d="M8 3v9M4 8.5l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6"
+                stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </a>
+        </div>
+      </section>
+
+      <section id="how-it-works" class="how" aria-labelledby="how-title">
+        <div class="how__inner">
+          <h2 id="how-title" class="how__title">How it works</h2>
+          <p class="how__lede">
+            AstroIdentify is a Python command-line tool. Give it a telescope image, with no
+            coordinates or target name, and it works out where in the sky the image points,
+            which catalogued objects are in the frame, and how well the image supports each
+            identification.
+          </p>
+
+          <ol class="steps">
+            <li class="step">
+              <h3>Load the image</h3>
+              <p>
+                Reads JPEG, PNG or FITS files, keeps their metadata, and estimates the
+                background and noise.
+              </p>
+            </li>
+            <li class="step">
+              <h3>Detect the stars</h3>
+              <p>
+                Finds and measures point sources, with dedicated handling for saturated stars.
+              </p>
+            </li>
+            <li class="step">
+              <h3>Solve where it points</h3>
+              <p>
+                Blind plate solving with a local Astrometry.net: only the pattern of detected
+                stars is used, never a filename or target hint.
+              </p>
+            </li>
+            <li class="step">
+              <h3>Match Gaia DR3</h3>
+              <p>
+                Pairs detected stars with Gaia DR3 and refines the image’s sky coordinates.
+              </p>
+            </li>
+            <li class="step">
+              <h3>Identify objects</h3>
+              <p>
+                Lists the galaxies, nebulae and clusters that SIMBAD places in the frame, and
+                annotates them on the image.
+              </p>
+            </li>
+            <li class="step">
+              <h3>Grade the evidence</h3>
+              <p>
+                Gives each identification a rule-based support level, from strong to
+                catalogue-only. These are explicit rules, not probabilities.
+              </p>
+            </li>
+          </ol>
+
+          <div class="how__extra">
+            <p>
+              <strong>Inspect an object.</strong> Pick any identified object to get a
+              display-only stretched view of where it lies, with its catalogue position,
+              size when known, and nearby reference stars.
+            </p>
+          </div>
+
+          <div class="run">
+            <h3 class="run__title">Run it</h3>
+            <pre class="run__code"><code><span class="run__prompt">$</span> pip install -e .
+<span class="run__prompt">$</span> cp astroidentify.example.toml my-image.toml
+<span class="run__prompt">$</span> astroidentify run my-image.toml</code></pre>
+            <p class="run__note">
+              Needs Python 3.11+, a local Astrometry.net installation with index files, and
+              network access (or a local cache) for the Gaia and SIMBAD queries. The project
+              README has the full details.
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
