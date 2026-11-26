@@ -146,3 +146,33 @@ def test_example_run_file_is_valid() -> None:
     example = Path(__file__).resolve().parents[1] / "astroidentify.example.toml"
     commands = build_commands(load_run_config(example))
     assert [c[0] for c in commands][-1] == "inspect-object"
+
+
+def test_annotate_step_is_wired_and_lists_repeat_the_option(tmp_path) -> None:
+    out = tmp_path / "out"
+    text = f"""
+image = "img.png"
+name = "f"
+output_root = "{out}"
+
+[annotate]
+types = ["galaxy", "star"]
+brightest = 5
+label = ["M 57", "Albireo"]
+"""
+    commands = _commands(tmp_path, text)
+    assert [c[0] for c in commands][-1] == "annotate"  # added when the section is present
+    annotate = commands[-1]
+    assert annotate[annotate.index("--objects") + 1] == str(out / "f-objects")
+    assert annotate[annotate.index("--evidence") + 1] == str(out / "f-evidence")
+    assert annotate[annotate.index("--output") + 1] == str(out / "f-annotated")
+    assert [annotate[i + 1] for i, a in enumerate(annotate) if a == "--label"] == [
+        "M 57",
+        "Albireo",
+    ]
+    assert [annotate[i + 1] for i, a in enumerate(annotate) if a == "--types"] == [
+        "galaxy",
+        "star",
+    ]
+    with pytest.raises(ConfigurationError, match="nested"):
+        _commands(tmp_path, 'image = "i.png"\n[annotate]\nlabel = [["a"]]\n')

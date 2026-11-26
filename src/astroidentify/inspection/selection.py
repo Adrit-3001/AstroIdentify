@@ -52,6 +52,11 @@ def normalise(text: str) -> str:
     return " ".join(str(text).split()).casefold()
 
 
+def compact(text: str) -> str:
+    """Case-fold and drop all whitespace (``"M57"`` and ``"M  57"`` -> ``"m57"``)."""
+    return "".join(str(text).split()).casefold()
+
+
 def _names(record: dict[str, Any], tier: str) -> list[str]:
     if tier == "display_name":
         return [record.get("display_name") or ""]
@@ -67,13 +72,15 @@ def _status(record: dict[str, Any]) -> str:
     return STATUS_RETAINED if record.get("retained") else "unknown"
 
 
-def _tiered(candidates: list[dict[str, Any]], query: str, kind: str) -> Selection | None:
+def _tiered(
+    candidates: list[dict[str, Any]], query: str, kind: str, key=normalise
+) -> Selection | None:
     """Tiered exact match within ``candidates``; ``None`` if nothing matches."""
-    wanted = normalise(query)
+    wanted = key(query)
     hits: dict[str, list[tuple[dict, str]]] = {tier: [] for tier in TIERS}
     for record in candidates:
         for tier in TIERS:
-            match = next((n for n in _names(record, tier) if normalise(n) == wanted), None)
+            match = next((n for n in _names(record, tier) if key(n) == wanted), None)
             if match is not None:
                 hits[tier].append((record, match))
                 break  # an object is counted once, at its best tier
@@ -95,6 +102,22 @@ def _tiered(candidates: list[dict[str, Any]], query: str, kind: str) -> Selectio
         later = tuple(r["display_name"] for t in TIERS[index + 1 :] for r, _ in hits[t])
         return Selection(record, tier, matched, query, later)
     return None
+
+
+def find_record(candidates: list[dict[str, Any]], query: str, kind: str) -> Selection | None:
+    """Tiered exact match of ``query`` among ``candidates`` (records with ``display_name``,
+    ``main_id``, ``aliases``, ``common_names``, ``catalogue_id``), or ``None``.
+
+    Names are compared ignoring case and repeated spaces; only if nothing matches that way,
+    ignoring spaces altogether (``"M57"`` finds SIMBAD's ``"M  57"``, ``"HD183987"`` finds
+    ``"HD 183987"``). No fuzzy matching.
+
+    Raises:
+        ObjectSelectionError: several candidates match at the deciding tier.
+    """
+    if not normalise(query):
+        return None
+    return _tiered(candidates, query, kind) or _tiered(candidates, query, kind, key=compact)
 
 
 def select_object(objects: list[dict[str, Any]], query: str) -> Selection:

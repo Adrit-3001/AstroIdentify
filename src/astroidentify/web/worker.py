@@ -21,8 +21,9 @@ from astroidentify.cli import main as cli_main
 from astroidentify.exceptions import AstroIdentifyError
 from astroidentify.preprocessing.loader import load_image
 from astroidentify.runfile import DEFAULT_STEPS, build_commands, output_dir
-from astroidentify.web.annotations import StepOutcome, build_result, render_annotated
+from astroidentify.web.annotations import StepOutcome, build_analysis, render_annotated
 from astroidentify.web.jobs import DONE, FAILED, read_json, write_json_atomic
+from astroidentify.web.view import make_view
 
 RUN_NAME = "result"
 
@@ -124,19 +125,21 @@ def analyze(job_dir: Path, solve_timeout: float, solve_total_timeout: float, cac
 
     progress.stage("annotate")
     step_dirs = {step: output_dir(config, step) for step in DEFAULT_STEPS}
-    result, pixels = build_result(
+    analysis, pixels = build_analysis(
         image,
         step_dirs,
         outcomes,
         filename=job.get("filename") or uploads[0].name,
         solve_total_timeout_seconds=solve_total_timeout,
     )
+    result = make_view(analysis)  # the default view; others are made on request
     result_dir = job_dir / "result"
     result_dir.mkdir(exist_ok=True)
     from PIL import Image
 
     Image.fromarray(pixels).save(result_dir / "original.png", optimize=False)
     render_annotated(pixels, result).save(result_dir / "annotated.png", optimize=False)
+    write_json_atomic(result_dir / "analysis.json", analysis)
     write_json_atomic(result_dir / "result.json", result)
     progress.done({"outcome": result["outcome"]["kind"], "counts": result["counts"]})
     return 0

@@ -58,16 +58,17 @@ function prettyAngle(text) {
 }
 
 /**
- * @param {HTMLElement} panel
- * @param {object} result   result.json from the server
+ * @param {{outcome: HTMLElement, details: HTMLElement}} panel  above / below the options
+ * @param {object} result   the result for the current display options, from the server
  * @param {object} job      job status (filename, elapsed)
  * @param {(id: number|null) => void} onHighlight
  */
 export function renderPanel(panel, result, job, onHighlight) {
   const { outcome, sky, counts, legend, objects, notes } = result;
+  const customised = result.view && !result.view.default;
   const nodes = [];
 
-  nodes.push(
+  panel.outcome.replaceChildren(
     h(
       'section',
       { class: `panel__outcome panel__outcome--${outcome.kind}` },
@@ -127,6 +128,17 @@ export function renderPanel(panel, result, job, onHighlight) {
     );
   }
 
+  const hiddenObjects = (counts.objects_total || 0) - objects.length;
+  if (!objects.length && hiddenObjects > 0) {
+    nodes.push(
+      h(
+        'section',
+        { class: 'panel__section' },
+        h('h3', {}, 'Catalogued objects'),
+        h('p', { class: 'panel__hint' }, `${hiddenObjects} hidden by your choices above.`),
+      ),
+    );
+  }
   if (objects.length) {
     const list = h(
       'ul',
@@ -145,7 +157,12 @@ export function renderPanel(panel, result, job, onHighlight) {
               o.name,
               o.common_name ? h('span', {}, ` · ${o.common_name}`) : null,
             ),
-            h('p', { class: 'objects__type' }, o.type),
+            h(
+              'p',
+              { class: 'objects__type' },
+              o.type,
+              o.magnitude ? ` · mag ${o.magnitude.value.toFixed(1)} (${o.magnitude.band})` : null,
+            ),
             o.support_text
               ? h('p', { class: `objects__support objects__support--${o.support}` }, o.support_text)
               : null,
@@ -161,20 +178,21 @@ export function renderPanel(panel, result, job, onHighlight) {
       }),
     );
     const labelled = counts.objects_labelled;
+    let hint = 'Hover one to find it on the image.';
+    if (customised && labelled < objects.length) {
+      hint = `${labelled || 'None'} named with your choices (only objects the image shows can be named); all are marked. Hover one to find it.`;
+    } else if (labelled < objects.length) {
+      hint = labelled
+        ? `${labelled} with image evidence are named on the image; all are marked. Hover one to find it.`
+        : 'None is clearly visible in the image, so they are marked but not named. Hover one to find it.';
+    }
     nodes.push(
       h(
         'section',
         { class: 'panel__section' },
         h('h3', {}, `Catalogued objects (${objects.length})`),
-        labelled < objects.length
-          ? h(
-              'p',
-              { class: 'panel__hint' },
-              labelled
-                ? `${labelled} with image evidence are named on the image; all are marked. Hover one to find it.`
-                : 'None is clearly visible in the image, so they are marked but not named. Hover one to find it.',
-            )
-          : h('p', { class: 'panel__hint' }, 'Hover one to find it on the image.'),
+        h('p', { class: 'panel__hint' }, hint),
+        hiddenObjects > 0 ? h('p', { class: 'panel__hint' }, `${hiddenObjects} more hidden by your choices above.`) : null,
         list,
       ),
     );
@@ -199,5 +217,5 @@ export function renderPanel(panel, result, job, onHighlight) {
     ),
   );
 
-  panel.replaceChildren(...nodes);
+  panel.details.replaceChildren(...nodes);
 }

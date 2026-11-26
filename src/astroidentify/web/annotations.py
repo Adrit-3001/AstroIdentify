@@ -1,17 +1,24 @@
 """From pipeline outputs to markers, a plain-language outcome and the annotated image.
 
-One marker list (``result.json``) drives both the browser preview and the downloadable
-``annotated.png``, so the two always show the same markers and the same labels.
+``build_analysis`` gathers every candidate marker the pipeline supports into one analysis
+document (``analysis.json``); ``view.make_view`` picks what a particular view shows and names
+(display options: marker types, brightest only, particular objects). One view document
+(``result.json`` for the default view) drives both the browser preview and the annotated PNG,
+so the two always show the same markers and the same labels.
 
-What gets a marker, and what gets a name:
+What gets a marker, and what may be named:
 
-* ``detection`` - a point of light the detection step accepted (brightest first, capped).
+* ``detection`` - a point of light the detection step accepted (brightest first).
   Never named.
-* ``star``      - a detection the catalogue step matched to a Gaia DR3 star. Named only when
-  the identification step's SIMBAD star rows give that Gaia star a name (common name,
-  Bayer/Flamsteed, variable-star, HD or HIP), using the inspection module's naming rule.
+* ``star``      - a detection the catalogue step matched to a Gaia DR3 star. Named when the
+  identification step's SIMBAD star rows give that Gaia star a name (common name,
+  Bayer/Flamsteed, variable-star, HD or HIP), or by its Gaia DR3 ID when asked for.
 * ``object``    - a catalogued non-stellar object the identification step placed in the image
-  (galaxy, nebula, cluster, ...), with its evidence level when the assessment ran.
+  (galaxy, nebula, cluster, ...), with its evidence level when the assessment ran. Named only
+  when the assessment found image support (strong, moderate or weak).
+
+A star's SIMBAD row is the one listing its Gaia DR3 source ID; failing that, a named row
+within 3″ of it (the inspection module's naming rule, with proper motion back to J2000).
 
 Coordinates are image pixels in display orientation (row 0 at the top), with integer values
 at pixel centres (the pipeline's canonical convention). FITS images, stored bottom row
@@ -31,35 +38,25 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from astroidentify.astrometry.wcs import format_dec, format_ra, load_wcs
-from astroidentify.inspection.references import load_gaia, select_reference_stars
+from astroidentify.exceptions import InvalidImageError, OutputError
+from astroidentify.inspection.references import load_gaia, star_name
 from astroidentify.objects.overlay import CATEGORY_COLORS, DEFAULT_COLOR
 from astroidentify.preprocessing.preview import stretch_for_display
 from astroidentify.types import AstronomyImage, ImageFormat
+from astroidentify.web.view import (
+    DETECTION_COLOR,
+    LABELLED_SUPPORT,
+    NAMED_STAR_COLOR,
+    STAR_COLOR,
+    SUPPORT_ORDER,
+    ViewOptions,
+    make_view,
+)
 
-#: Brightest unmatched detections marked (the rest are counted, not drawn).
-MAX_DETECTION_MARKERS = 300
-#: Brightest Gaia-matched stars marked.
-MAX_STAR_MARKERS = 300
-#: Catalogued objects that get a text label on the image (all are marked and listed).
-MAX_OBJECT_LABELS = 12
-#: Named bright stars labelled on the image.
-MAX_STAR_LABELS = 8
-#: Brightest Gaia stars considered for names.
-STAR_NAME_CANDIDATES = 40
-
-SUPPORT_ORDER = ("strong", "moderate", "weak", "catalogue-only", "insufficient")
-#: Evidence levels whose objects are named on the image (the others are marked and listed).
-LABELLED_SUPPORT = ("strong", "moderate", "weak")
-SUPPORT_TEXT = {
-    "strong": "Strong image evidence",
-    "moderate": "Moderate image evidence",
-    "weak": "Weak image evidence",
-    "catalogue-only": "Catalogued here; not visible in the image",
-    "insufficient": "Not enough information to judge",
-}
-DETECTION_COLOR = (150, 162, 190)
-STAR_COLOR = (150, 205, 255)
-NAMED_STAR_COLOR = (235, 240, 255)
+#: Version of ``analysis.json``.
+ANALYSIS_VERSION = 2
+#: A named SIMBAD star row this close to a Gaia star (at J2000) names it.
+NAME_MATCH_ARCSEC = 3.0
 
 SOLVE_FAILURES = {
     "timeout": "Plate solving ran out of time before it found where the image points.",
@@ -137,8 +134,28 @@ def build_result(
     *,
     filename: str,
     solve_total_timeout_seconds: float,
+    options: ViewOptions | None = None,
 ) -> tuple[dict[str, Any], np.ndarray]:
-    """The result document and the base display pixels (display orientation)."""
+    """The view document for ``options`` (default view) and the base display pixels."""
+    analysis, pixels = build_analysis(
+        image,
+        step_dirs,
+        outcomes,
+        filename=filename,
+        solve_total_timeout_seconds=solve_total_timeout_seconds,
+    )
+    return make_view(analysis, options), pixels
+
+
+def build_analysis(
+    image: AstronomyImage,
+    step_dirs: dict[str, Path],
+    outcomes: dict[str, StepOutcome],
+    *,
+    filename: str,
+    solve_total_timeout_seconds: float,
+) -> tuple[dict[str, Any], np.ndarray]:
+    """Every candidate marker plus outcome and sky position, and the display pixels."""
     pixels, stretched = display_pixels(image)
     height, width = pixels.shape[:2]
     flip = image.display_origin == "lower"
@@ -169,10 +186,12 @@ def build_result(
             for row in csv.DictReader(fh):
                 matches[int(row["detection_source_id"])] = row
 
-    # Identified objects, their evidence, and names for matched stars.
+    # Identified objects, their evidence, and SIMBAD rows for matched stars.
+    table: list[dict[str, Any]] = []
     objects: list[dict[str, Any]] = []
-    star_names: dict[int, str] = {}
-    pixel_scale = None
+    star_rows: dict[int, dict[str, Any]] = {}
+    gaia_in_image: list[str] = []
+    assessed = False
     if ok("identify"):
         table = (_read_json(step_dirs["identify"] / "catalog_objects.json") or {}).get(
             "objects", []
@@ -183,53 +202,70 @@ def build_result(
         if ok("assess"):
             doc = _read_json(step_dirs["assess"] / "object_evidence.json") or {}
             evidence = {e["catalogue_id"]: e for e in doc.get("objects", [])}
+            assessed = True
         objects = _objects(table, evidence, width, height, fy)
-        if matches and pixel_scale:
-            star_names = _star_names(table, summary, step_dirs, width, height, matches, pixel_scale)
+        if matches:
+            matched_ids = {int(m["gaia_source_id"]) for m in matches.values()}
+            star_rows = _star_rows(
+                table, summary, width, height, matched_ids, pixel_scale, step_dirs
+            )
+    if ok("catalog-match"):
+        gaia_in_image = _gaia_in_image(step_dirs["catalog-match"], matches)
 
-    markers: list[dict[str, Any]] = []
     matched_rows = [s for s in detections if s["source_id"] in matches]
-    matched_rows.sort(key=lambda s: _g_mag(matches[s["source_id"]]))
-    for s in matched_rows[:MAX_STAR_MARKERS]:
+    matched_rows.sort(key=lambda s: _mag_key(_g_mag(matches[s["source_id"]])))
+    stars = []
+    for s in matched_rows:
         match = matches[s["source_id"]]
         gaia_id = int(match["gaia_source_id"])
-        marker = {
+        star = {
             "kind": "star",
             "x": round(float(s["x"]), 2),
             "y": round(fy(float(s["y"])), 2),
             "gaia_id": str(gaia_id),
             "g_mag": _round(_g_mag(match), 2),
         }
-        if gaia_id in star_names:
-            marker["name"] = star_names[gaia_id]
-        markers.append(marker)
-    named = [m for m in markers if m.get("name")][:MAX_STAR_LABELS]
-    for m in named:
-        m["label"] = True
-    unmatched = [s for s in detections if s["source_id"] not in matches]
-    for s in unmatched[:MAX_DETECTION_MARKERS]:
-        markers.append(
-            {"kind": "detection", "x": round(float(s["x"]), 2), "y": round(fy(float(s["y"])), 2)}
-        )
-    markers.extend(objects)
+        row = star_rows.get(gaia_id)
+        if row is not None:
+            named = star_name(row)
+            if named:
+                star["name"] = named[0]
+            star["main_id"] = row.get("main_id")
+            star["aliases"] = _star_aliases(row)
+            star["common_names"] = list(row.get("common_names") or ())
+        stars.append(star)
+    unmatched = [
+        {"kind": "detection", "x": round(float(s["x"]), 2), "y": round(fy(float(s["y"])), 2)}
+        for s in detections
+        if s["source_id"] not in matches
+    ]
 
-    counts = {
+    # Catalogue rows that are neither drawn nor a matched star's: kept only to explain why a
+    # requested name isn't labelled (not detected, outside the image, a type not marked).
+    drawn = {o["id"] for o in objects}
+    matched_gaia = {int(s["gaia_id"]) for s in stars}
+    used = {id(r) for r in star_rows.values()}
+    lookup = [
+        _lookup_row(r)
+        for r in table
+        if r["catalogue_id"] not in drawn
+        and id(r) not in used
+        and not matched_gaia.intersection(_gaia_ids(r))
+    ]
+
+    totals = {
         "detections": len(detections),
-        "detections_marked": min(len(unmatched), MAX_DETECTION_MARKERS),
         "matched_stars": len(matched_rows),
-        "stars_marked": min(len(matched_rows), MAX_STAR_MARKERS),
-        "named_stars": len(named),
         "objects": len(objects),
-        "objects_labelled": sum(1 for o in objects if o.get("label")),
     }
     sky = _sky(step_dirs.get("solve"))
     if sky is not None:
         sky["check"] = _sky_check(step_dirs, ok("catalog-match"))
         sky["confirmed"] = ok("catalog-match")
-    outcome = _outcome(outcomes, counts, sky, step_dirs, solve_total_timeout_seconds)
+    outcome = _outcome(outcomes, totals, sky, step_dirs, solve_total_timeout_seconds)
 
-    result = {
-        "schema_version": 1,
+    analysis = {
+        "analysis_version": ANALYSIS_VERSION,
         "filename": filename,
         "image": {
             "width": width,
@@ -239,14 +275,15 @@ def build_result(
         },
         "outcome": outcome,
         "sky": sky,
-        "counts": counts,
+        "totals": totals,
+        "assessed": assessed,
         "style": marker_style(width, height),
-        "legend": _legend(counts, objects),
-        "markers": markers,
-        "objects": [_object_summary(o) for o in objects],
         "notes": notes,
+        "pool": {"stars": stars, "detections": unmatched, "objects": objects},
+        "lookup": lookup,
+        "gaia_in_image": gaia_in_image,
     }
-    return result, pixels
+    return analysis, pixels
 
 
 def _g_mag(match: dict[str, str]) -> float:
@@ -256,12 +293,27 @@ def _g_mag(match: dict[str, str]) -> float:
         return math.nan
 
 
+def _mag_key(value: float) -> tuple[bool, float]:
+    """Sort key: brightest first, missing magnitudes last."""
+    return (not math.isfinite(value), value if math.isfinite(value) else 0.0)
+
+
 def _round(value: float, digits: int) -> float | None:
     return round(value, digits) if math.isfinite(value) else None
 
 
+def _magnitude(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Catalogued visual magnitude: SIMBAD V, else B."""
+    mags = row.get("magnitudes") or {}
+    for band in ("V", "B"):
+        value = mags.get(band)
+        if isinstance(value, int | float) and math.isfinite(value):
+            return {"band": band, "value": round(float(value), 2)}
+    return None
+
+
 def _objects(table, evidence, width, height, fy) -> list[dict[str, Any]]:
-    """Markers for the identified (retained) objects, labelled best-supported first."""
+    """Markers for the identified (retained) objects that can be drawn, best supported first."""
     rows = [r for r in table if r.get("retained")]
 
     def rank(r):
@@ -282,6 +334,7 @@ def _objects(table, evidence, width, height, fy) -> list[dict[str, Any]]:
         if not centre_in and not footprint:
             continue  # nothing of it can be drawn inside the image
         ev = evidence.get(r["catalogue_id"]) or {}
+        support = ev.get("support_level")
         markers.append(
             {
                 "kind": "object",
@@ -295,46 +348,103 @@ def _objects(table, evidence, width, height, fy) -> list[dict[str, Any]]:
                 "category": r.get("category"),
                 "color": _hex(CATEGORY_COLORS.get(r.get("category"), DEFAULT_COLOR)),
                 "footprint": footprint or None,
-                "support": ev.get("support_level"),
+                "support": support,
                 "explanation": ev.get("explanation"),
+                "magnitude": _magnitude(r),
+                # Named only when the image shows it (the evidence step's levels).
+                "eligible": support in LABELLED_SUPPORT,
+                "main_id": r.get("main_id"),
+                "aliases": list(r.get("aliases") or ()),
+                "common_names": list(r.get("common_names") or ()),
             }
         )
-    # Names on the image for objects the image shows (the assessment's evidence levels); the
-    # rest are marked and listed. Without an assessment, the best-referenced objects.
-    assessed = bool(evidence)
-    shown = [m for m in markers if m["support"] in LABELLED_SUPPORT] if assessed else markers
-    for m in shown[:MAX_OBJECT_LABELS]:
-        m["label"] = True
     return markers
 
 
-def _star_names(table, summary, step_dirs, width, height, matches, pixel_scale) -> dict[int, str]:
-    """Names for Gaia stars that were matched to detections (inspection naming rule)."""
+def _gaia_ids(row: dict[str, Any]) -> list[int]:
+    ids = []
+    for alias in row.get("aliases") or ():
+        if alias.startswith("Gaia DR3 ") and alias[9:].strip().isdigit():
+            ids.append(int(alias[9:]))
+    return ids
+
+
+def _star_aliases(row: dict[str, Any]) -> list[str]:
+    """SIMBAD identifiers of a star, plus ``* bet01 Cyg``/``V* IV Vul`` without the prefix."""
+    aliases = list(row.get("aliases") or ())
+    for alias in list(aliases):
+        for prefix in ("* ", "V* "):
+            if alias.startswith(prefix):
+                aliases.append(alias[len(prefix) :])
+    return aliases
+
+
+def _star_rows(table, summary, width, height, matched_ids, pixel_scale, step_dirs):
+    """SIMBAD star row for each Gaia-matched star that has one (see the module docstring)."""
+    simbad_stars = [o for o in table if o.get("category") == "star"]
+    rows: dict[int, dict[str, Any]] = {}
+    for row in simbad_stars:
+        for gaia_id in _gaia_ids(row):
+            if gaia_id in matched_ids:
+                rows.setdefault(gaia_id, row)
+    # Named rows without a Gaia DR3 ID (often the brightest stars): by position.
+    named = [
+        r for r in simbad_stars
+        if not _gaia_ids(r) and star_name(r) and math.isfinite(r.get("projected_x") or math.nan)
+    ]  # fmt: skip
+    remaining = matched_ids - rows.keys()
     wcs_path = Path((summary.get("wcs") or {}).get("path", ""))
     gaia_path = step_dirs["catalog-match"] / "gaia_sources.csv"
+    if not named or not remaining or not pixel_scale:
+        return rows
     if not wcs_path.is_file() or not gaia_path.is_file():
-        return {}
+        return rows
     wcs, _ = load_wcs(wcs_path)
     gaia = load_gaia(gaia_path, wcs, width, height)
-    simbad_stars = [o for o in table if o.get("category") == "star"]
-    region = (-0.5, -0.5, width - 0.5, height - 0.5)
-    stars = select_reference_stars(gaia, STAR_NAME_CANDIDATES, region, simbad_stars, pixel_scale)
-    matched_ids = {int(m["gaia_source_id"]) for m in matches.values()}
-    return {s.gaia_source_id: s.name for s in stars if s.name and s.gaia_source_id in matched_ids}
+    radius_px = NAME_MATCH_ARCSEC / pixel_scale
+    for k, gaia_id in enumerate(gaia.source_id.tolist()):
+        if gaia_id not in remaining:
+            continue
+        nx = float(gaia.x_name[k]) if gaia.x_name is not None else float(gaia.x[k])
+        ny = float(gaia.y_name[k]) if gaia.y_name is not None else float(gaia.y[k])
+        best = min(named, key=lambda r: math.hypot(r["projected_x"] - nx, r["projected_y"] - ny))
+        if math.hypot(best["projected_x"] - nx, best["projected_y"] - ny) <= radius_px:
+            rows[gaia_id] = best
+    return rows
 
 
-def _object_summary(o: dict[str, Any]) -> dict[str, Any]:
+def _gaia_in_image(catalog_dir: Path, matches: dict[int, dict[str, str]]) -> list[str]:
+    """Gaia source IDs inside the image, bright enough for the catalogue step to try to match
+    them (``eligible``), that no detection was matched to."""
+    path = catalog_dir / "gaia_sources.csv"
+    matched = {m["gaia_source_id"] for m in matches.values()}
+    try:
+        with path.open(encoding="utf-8") as fh:
+            return [
+                r["source_id"]
+                for r in csv.DictReader(fh)
+                if r.get("in_image") == "true"
+                and r.get("eligible") == "true"
+                and r["source_id"] not in matched
+            ]
+    except (OSError, KeyError):
+        return []
+
+
+def _lookup_row(r: dict[str, Any]) -> dict[str, Any]:
+    """A catalogue row kept only to explain why a requested name isn't labelled."""
+    star = r.get("category") == "star"
+    aliases = _star_aliases(r) if star else list(r.get("aliases") or ())
     return {
-        "id": o["id"],
-        "name": o["name"],
-        "common_name": o["common_name"],
-        "type": o["type"],
-        "color": o["color"],
-        "support": o["support"],
-        "support_text": SUPPORT_TEXT.get(o["support"]) if o["support"] else None,
-        "explanation": o["explanation"],
-        "labelled": bool(o.get("label")),
-        "centre_in_image": o["centre_in_image"],
+        "display_name": r.get("display_name") or r.get("main_id"),
+        "main_id": r.get("main_id"),
+        "aliases": aliases,
+        "common_names": list(r.get("common_names") or ()),
+        "catalogue_id": r.get("catalogue_id"),
+        "object_type": r.get("object_type"),
+        "type": r.get("object_type_description") or r.get("object_type"),
+        "category": r.get("category"),
+        "status": r.get("status") or ("catalogued_in_field" if r.get("retained") else None),
     }
 
 
@@ -402,35 +512,6 @@ def friendly_error(error: str | None) -> str | None:
     if "time limit" in lower or "timed out" in lower:
         return "The catalogue service didn't answer in time."
     return error if len(error) <= 240 else error[:237] + "…"
-
-
-def _legend(counts: dict[str, int], objects: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    legend = []
-    if counts["objects"]:
-        legend.append(
-            {
-                "kind": "object",
-                "label": "Catalogued object",
-                "detail": "A galaxy, nebula or cluster the catalogue places here: outlined when "
-                "its size is catalogued, a crosshair when it isn't. Named on the image when the "
-                "image shows evidence of it; all are listed beside the image.",
-                "colors": sorted({o["color"] for o in objects}),
-            }
-        )
-    if counts["matched_stars"]:
-        detail = "A detected point of light matched to a star in Gaia DR3."
-        if counts["stars_marked"] < counts["matched_stars"]:
-            detail += f" The brightest {counts['stars_marked']} are marked."
-        if counts["named_stars"]:
-            detail += " Named when the star has a catalogued name."
-        legend.append({"kind": "star", "label": "Matched star", "detail": detail})
-    if counts["detections_marked"]:
-        unmatched = counts["detections"] - counts["matched_stars"]
-        detail = "A point of light found in the image, not matched to a catalogue."
-        if counts["detections_marked"] < unmatched:
-            detail += f" The brightest {counts['detections_marked']} of {unmatched} are marked."
-        legend.append({"kind": "detection", "label": "Detected point", "detail": detail})
-    return legend
 
 
 def _plural(n: int, word: str) -> str:
@@ -675,3 +756,116 @@ def render_annotated(pixels: np.ndarray, result: dict[str, Any]) -> Image.Image:
 def _rgb(hex_color: str) -> tuple[int, int, int]:
     h = hex_color.lstrip("#")
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+# --------------------------------------------------------------------------- CLI
+
+
+@dataclass(frozen=True)
+class AnnotationPaths:
+    image: Path
+    summary: Path
+
+
+def annotation_inputs(
+    objects_dir: Path,
+    *,
+    evidence_dir: Path | None = None,
+    detections: Path | None = None,
+    astrometry_dir: Path | None = None,
+    catalog_dir: Path | None = None,
+) -> tuple[dict[str, Path], dict[str, StepOutcome]]:
+    """Step directories for ``build_analysis`` from saved outputs (``astroidentify annotate``).
+
+    Missing inputs default to those recorded in the identification summary. A step counts as
+    done when its main product exists; without ``evidence_dir`` no object can be named.
+
+    Raises:
+        OutputError: ``objects_dir`` is not an identification output directory.
+    """
+    objects_dir = Path(objects_dir)
+    summary = _read_json(objects_dir / "identification_summary.json")
+    if summary is None or not (objects_dir / "catalog_objects.json").is_file():
+        raise OutputError(
+            f"{objects_dir} is not an 'identify' output directory "
+            "(identification_summary.json and catalog_objects.json are needed)"
+        )
+    recorded = summary.get("inputs") or {}
+
+    def recorded_dir(key: str) -> Path | None:
+        return Path(recorded[key]).parent if recorded.get(key) else None
+
+    if detections is not None and Path(detections).suffix == ".json":
+        detections = Path(detections).parent
+    dirs = {
+        "detect": Path(detections) if detections else recorded_dir("detections"),
+        "solve": Path(astrometry_dir) if astrometry_dir else recorded_dir("plate_solution"),
+        "catalog-match": Path(catalog_dir) if catalog_dir else recorded_dir("catalog_summary"),
+        "identify": objects_dir,
+        "assess": Path(evidence_dir) if evidence_dir else None,
+    }
+    products = {
+        "detect": "sources.json",
+        "solve": "plate_solution.json",
+        "catalog-match": "catalog_matches.csv",
+        "identify": "catalog_objects.json",
+        "assess": "object_evidence.json",
+    }
+    outcomes = {}
+    for step, directory in dirs.items():
+        if directory is None:
+            continue
+        product = directory / products[step]
+        ok = product.is_file()
+        if ok and step == "solve":
+            ok = bool((_read_json(product) or {}).get("solved"))
+        outcomes[step] = StepOutcome(ok, None if ok else f"{product} not found")
+    return {k: v for k, v in dirs.items() if v is not None}, outcomes
+
+
+def annotate_image(
+    image: AstronomyImage,
+    step_dirs: dict[str, Path],
+    outcomes: dict[str, StepOutcome],
+    output_dir: Path,
+    options: ViewOptions | None = None,
+) -> tuple[dict[str, Any], AnnotationPaths]:
+    """Write ``annotated.png`` and ``annotation.json`` (the view: options, markers, answers).
+
+    Raises:
+        InvalidImageError: the image isn't the one the products were made from (size).
+        OutputError: the outputs can't be written.
+    """
+    summary = _read_json(step_dirs["identify"] / "identification_summary.json") or {}
+    size = summary.get("image") or {}
+    if size.get("width") and (size["width"], size["height"]) != (image.width, image.height):
+        raise InvalidImageError(
+            f"the image is {image.width}x{image.height} pixels but the identification was "
+            f"made from a {size['width']}x{size['height']} image"
+        )
+    analysis, pixels = build_analysis(
+        image,
+        step_dirs,
+        outcomes,
+        filename=Path(image.source_path).name,
+        solve_total_timeout_seconds=0,
+    )
+    view = make_view(analysis, options)
+    output_dir = Path(output_dir)
+    paths = AnnotationPaths(output_dir / "annotated.png", output_dir / "annotation.json")
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        render_annotated(pixels, view).save(paths.image)
+        document = {
+            "statement": "Display only: the options choose among saved pipeline results; nothing "
+            "is re-measured. Objects are named only with image evidence (strong, moderate or "
+            "weak), stars only when matched to a detection in Gaia DR3.",
+            "inputs": {k: str(v) for k, v in step_dirs.items()},
+            "steps_available": {k: o.ok for k, o in outcomes.items()},
+            **view,
+            "artifacts": {"image": str(paths.image), "summary": str(paths.summary)},
+        }
+        paths.summary.write_text(json.dumps(document, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise OutputError(f"could not write annotation outputs to {output_dir}: {exc}") from exc
+    return view, paths

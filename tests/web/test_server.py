@@ -130,3 +130,84 @@ def test_unknown_and_malformed_jobs(server):
 def test_static_site_is_served(server):
     status, _, body = _request(f"{server}/")
     assert status == 200 and b"<title>t</title>" in body
+
+
+def _finished_job(tmp_path, *, with_analysis=True) -> str:
+    """A finished job made from the synthetic pipeline outputs, as the worker leaves it."""
+    import uuid
+
+    from astroidentify.preprocessing.loader import load_image
+    from astroidentify.web.annotations import build_analysis, render_annotated
+    from astroidentify.web.jobs import write_json_atomic
+    from astroidentify.web.view import make_view
+    from tests.web.fixtures import all_ok, outputs, png
+
+    job_id = uuid.uuid4().hex
+    directory = tmp_path / "jobs" / job_id
+    (directory / "result").mkdir(parents=True)
+    analysis, pixels = build_analysis(
+        load_image(png(tmp_path)),
+        outputs(tmp_path),
+        all_ok(),
+        filename="m57.png",
+        solve_total_timeout_seconds=900,
+    )
+    result = make_view(analysis)
+    Image.fromarray(pixels).save(directory / "result" / "original.png")
+    render_annotated(pixels, result).save(directory / "result" / "annotated.png")
+    if with_analysis:
+        write_json_atomic(directory / "result" / "analysis.json", analysis)
+    write_json_atomic(directory / "result" / "result.json", result)
+    job = {"id": job_id, "filename": "m57.png", "state": "done", "finished_ts": time.time()}
+    write_json_atomic(directory / "job.json", job)
+    return job_id
+
+
+def test_view_applies_display_options(server, tmp_path):
+    job_id = _finished_job(tmp_path)
+    status, _, body = _request(f"{server}/api/jobs/{job_id}")
+    default = json.loads(body)["result"]
+    assert status == 200 and default["view"]["default"]
+
+    query = "types=galaxy&brightest=1&label=M57&label=Vega"
+    status, _, body = _request(f"{server}/api/jobs/{job_id}/view?{query}")
+    view = json.loads(body)
+    assert status == 200 and not view["view"]["default"]
+    assert {m["kind"] for m in view["markers"]} == {"object"}
+    assert sorted(m["name"] for m in view["markers"] if m.get("label")) == ["M 57", "NGC 2"]
+    statuses = {a["query"]: a["status"] for a in view["view"]["requests"]}
+    assert statuses == {"M57": "labelled", "Vega": "not_detected"}
+    assert "pool" not in view and "lookup" not in view  # the browser gets only the view
+
+    status, _, body = _request(f"{server}/api/jobs/{job_id}/view?types=")
+    assert status == 200 and json.loads(body)["markers"] == []
+
+
+def test_annotated_png_follows_the_display_options(server, tmp_path):
+    job_id = _finished_job(tmp_path)
+    directory = tmp_path / "jobs" / job_id / "result"
+    stored = (directory / "annotated.png").read_bytes()
+    assert _request(f"{server}/api/jobs/{job_id}/annotated.png")[2] == stored
+    status, headers, body = _request(f"{server}/api/jobs/{job_id}/annotated.png?types=&download=1")
+    assert status == 200 and headers["Content-Type"] == "image/png"
+    assert headers["Content-Disposition"] == 'attachment; filename="m57-annotated.png"'
+    import io
+
+    drawn = np.asarray(Image.open(io.BytesIO(body)))
+    original = np.asarray(Image.open(directory / "original.png"))
+    assert drawn.shape == original.shape and np.array_equal(drawn, original)  # nothing shown
+
+
+@pytest.mark.parametrize("query", ["types=comet", "brightest=0", "brightest=lots"])
+def test_invalid_display_options_are_refused(server, tmp_path, query):
+    job_id = _finished_job(tmp_path)
+    for asset in ("view", "annotated.png"):
+        status, _, body = _request(f"{server}/api/jobs/{job_id}/{asset}?{query}")
+        assert status == 400 and "Invalid display options" in json.loads(body)["error"]
+
+
+def test_jobs_from_before_display_options_say_so(server, tmp_path):
+    job_id = _finished_job(tmp_path, with_analysis=False)
+    status, _, body = _request(f"{server}/api/jobs/{job_id}/view?brightest=2")
+    assert status == 404 and "earlier version" in json.loads(body)["error"]
+    assert _request(f"{server}/api/jobs/{job_id}/annotated.png")[0] == 200  # default still works

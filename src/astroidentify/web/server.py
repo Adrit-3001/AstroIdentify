@@ -7,8 +7,14 @@ API (JSON unless noted):
                                              (URI-encoded). Answers 202 with the job at once.
 * ``GET  /api/jobs/<id>``                    state, stage progress, queue place, result
 * ``GET  /api/jobs/<id>/original.png``       the image as analysed (display orientation)
+* ``GET  /api/jobs/<id>/view``               the result for display options (below)
 * ``GET  /api/jobs/<id>/annotated.png``      the full-resolution annotated image
                                              (``?download=1`` saves it as a file)
+
+Display options (query parameters of ``view`` and ``annotated.png``; see ``web.view``):
+``types=galaxy,nebula,star`` (marker types to show; empty = none), ``brightest=N`` (name only
+the N brightest) and ``label=NAME`` (repeatable: name these particular objects too). The
+preview and the PNG for the same options are made from the same marker list.
 
 Everything else is served from the static site directory. Standard library only.
 """
@@ -43,10 +49,12 @@ from astroidentify.web.validation import (
     check_request,
     display_name,
 )
+from astroidentify.web.view import TYPE_KEYS, ViewOptions, ViewOptionsError, make_view
 
 logger = logging.getLogger(__name__)
 
-_JOB_PATH = re.compile(r"^/api/jobs/([0-9a-f]{32})(?:/(original\.png|annotated\.png))?$")
+_JOB_PATH = re.compile(r"^/api/jobs/([0-9a-f]{32})(?:/(original\.png|annotated\.png|view))?$")
+_VIEW_PARAMS = ("types", "brightest", "label")
 
 
 class AppServer(ThreadingHTTPServer):
@@ -104,8 +112,11 @@ class Handler(SimpleHTTPRequestHandler):
         match = _JOB_PATH.match(url.path)
         if match:
             job_id, asset = match.groups()
+            params = parse_qs(url.query, keep_blank_values=True)
+            if asset == "view":
+                return self._view(job_id, params)
             if asset:
-                return self._asset(job_id, asset, "download" in parse_qs(url.query))
+                return self._asset(job_id, asset, params)
             return self._status(job_id)
         if url.path.startswith("/api/"):
             return self._error(HTTPStatus.NOT_FOUND, "Unknown API endpoint.")
@@ -143,6 +154,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "max_upload_bytes": s.max_upload_bytes,
                 "retention_hours": s.retention_hours,
                 "stages": [{"key": k, "label": label} for k, label in STAGES],
+                "view_types": list(TYPE_KEYS),
             },
         )
 
@@ -183,12 +195,45 @@ class Handler(SimpleHTTPRequestHandler):
             payload["result"] = read_json(directory / "result" / "result.json")
         self._json(HTTPStatus.OK, payload)
 
-    def _asset(self, job_id: str, asset: str, download: bool) -> None:
+    def _options_view(self, job_id: str, params: dict[str, list[str]]):
+        """``(view, directory)`` for the display options in ``params``, or ``None`` after
+        answering with an error."""
+        try:
+            options = ViewOptions.from_query(params)
+        except ViewOptionsError as exc:
+            self._error(HTTPStatus.BAD_REQUEST, f"Invalid display options: {exc}.")
+            return None
+        directory = self.server.store.directory(job_id)
+        analysis = read_json(directory / "result" / "analysis.json") if directory else None
+        if analysis is None:
+            message = "This analysis doesn't exist or has expired."
+            if directory and (directory / "result" / "result.json").is_file():
+                message = (
+                    "This analysis was made by an earlier version of AstroIdentify, so its "
+                    "display options can't be changed. Analyze the image again to use them."
+                )
+            self._error(HTTPStatus.NOT_FOUND, message)
+            return None
+        return make_view(analysis, options), directory
+
+    def _view(self, job_id: str, params: dict[str, list[str]]) -> None:
+        made = self._options_view(job_id, params)
+        if made is not None:
+            self._json(HTTPStatus.OK, made[0])
+
+    def _asset(self, job_id: str, asset: str, params: dict[str, list[str]]) -> None:
         directory = self.server.store.directory(job_id)
         path = directory / "result" / asset if directory else None
         if path is None or not path.is_file():
             return self._error(HTTPStatus.NOT_FOUND, "This image isn't available.")
-        data = path.read_bytes()
+        if asset == "annotated.png" and any(k in params for k in _VIEW_PARAMS):
+            made = self._options_view(job_id, params)
+            if made is None:
+                return None
+            data = _render_png(made[0], directory / "result" / "original.png")
+        else:
+            data = path.read_bytes()
+        download = "download" in params
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "image/png")
         self.send_header("Content-Length", str(len(data)))
@@ -201,6 +246,22 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
+
+
+def _render_png(view: dict[str, Any], original: Path) -> bytes:
+    """The annotated PNG for a view, drawn on the saved original (display orientation)."""
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    from astroidentify.web.annotations import render_annotated
+
+    with Image.open(original) as image:
+        pixels = np.asarray(image)
+    buffer = io.BytesIO()
+    render_annotated(pixels, view).save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def _elapsed(job: dict[str, Any]) -> float | None:

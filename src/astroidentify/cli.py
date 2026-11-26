@@ -474,6 +474,63 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_verbose(inspect)
 
+    from astroidentify.web.view import MAX_BRIGHTEST, TYPE_KEYS
+
+    annotate = commands.add_parser(
+        "annotate",
+        help="annotated copy of the image: choose marker types, name only the brightest, "
+        "or name particular objects",
+        description="Draw the saved results on the image, as on the website. Display only: the "
+        "options choose among the pipeline's results and nothing is re-measured. Objects are "
+        "named only when the evidence step found image support for them, stars only when a "
+        "detection was matched to them in Gaia DR3.",
+    )
+    annotate.add_argument("input", type=Path, help="the image the products were made from")
+    annotate.add_argument(
+        "--objects", type=Path, required=True, help="Milestone 5 ('identify') output directory"
+    )
+    annotate.add_argument(
+        "--evidence",
+        type=Path,
+        help="Milestone 6 ('assess') output directory; without it no object can be named",
+    )
+    annotate.add_argument(
+        "--detections",
+        type=Path,
+        help="Milestone 2 output directory or sources.json (default: from --objects)",
+    )
+    annotate.add_argument(
+        "--astrometry", type=Path, help="Milestone 3 output directory (default: from --objects)"
+    )
+    annotate.add_argument(
+        "--catalog", type=Path, help="Milestone 4 output directory (default: from --objects)"
+    )
+    annotate.add_argument(
+        "-o", "--output", type=Path, help="output directory (default: outputs/<image>-annotated)"
+    )
+    annotate.add_argument(
+        "--types",
+        action="append",
+        metavar="TYPE[,TYPE...]",
+        help="marker types to show (repeatable; default: all): " + ", ".join(TYPE_KEYS),
+    )
+    annotate.add_argument(
+        "--brightest",
+        type=int,
+        metavar="N",
+        help=f"name only the N (1-{MAX_BRIGHTEST}) brightest, by catalogued magnitude "
+        "(Gaia G for stars, V or B for objects)",
+    )
+    annotate.add_argument(
+        "--label",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="also name this object or star (repeatable): name, catalogue ID, alias or Gaia "
+        "DR3 source ID, matched exactly ignoring case and spaces",
+    )
+    _add_verbose(annotate)
+
     run_parser = commands.add_parser(
         "run",
         help="run several steps from one TOML file (see astroidentify.example.toml)",
@@ -578,6 +635,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_assess(args)
     if args.command == "inspect-object":
         return _run_inspect(args)
+    if args.command == "annotate":
+        return _run_annotate(args)
     if args.command == "run":
         return _run_file(args)
     if args.command == "serve":
@@ -944,6 +1003,69 @@ def _run_inspect(args: argparse.Namespace) -> int:
         return EXIT_ERROR
     print(format_inspect_summary(result))
     return EXIT_OK
+
+
+def _run_annotate(args: argparse.Namespace) -> int:
+    from astroidentify.preprocessing.loader import load_image
+    from astroidentify.web.annotations import annotate_image, annotation_inputs
+    from astroidentify.web.view import ViewOptions, ViewOptionsError
+
+    try:
+        options = ViewOptions.from_values(args.types, args.brightest, args.label)
+    except ViewOptionsError as exc:
+        _error(exc)
+        return EXIT_USAGE
+    output_dir = args.output
+    if output_dir is None:
+        base = default_output_dir(args.input)
+        output_dir = base.with_name(f"{base.name}-annotated")
+    try:
+        step_dirs, outcomes = annotation_inputs(
+            args.objects,
+            evidence_dir=args.evidence,
+            detections=args.detections,
+            astrometry_dir=args.astrometry,
+            catalog_dir=args.catalog,
+        )
+        image = load_image(args.input)
+        view, paths = annotate_image(image, step_dirs, outcomes, output_dir, options)
+    except AstroIdentifyError as exc:
+        _error(exc)
+        return EXIT_ERROR
+    print(format_annotate_summary(view, outcomes, paths))
+    return EXIT_OK
+
+
+def _count(n: int, word: str) -> str:
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def format_annotate_summary(view, outcomes, paths) -> str:
+    """What is shown and named, and the answer to each requested name."""
+    c = view["counts"]
+    chosen = view["view"]["options"]
+    types = ", ".join(chosen["types"]) if chosen["types"] is not None else "all"
+    if chosen["types"] == []:
+        types = "none (only requested objects)"
+    named = [m["name"] for m in view["markers"] if m.get("label")]
+    lines = [
+        f"Shown: {_count(c['objects'], 'object')}, {_count(c['stars_marked'], 'star')}, "
+        f"{_count(c['detections_marked'], 'other point')} of light (types: {types})",
+        "Naming: "
+        + (f"the {chosen['brightest']} brightest" if chosen["brightest"] else "default limits")
+        + (f", plus {len(chosen['labels'])} requested" if chosen["labels"] else ""),
+        f"Named ({len(named)}): " + (", ".join(named) if named else "none"),
+    ]
+    if "assess" not in outcomes or not outcomes["assess"].ok:
+        lines.append(
+            "Evidence: not available (pass --evidence), so no catalogued object can be named"
+        )
+    for answer in view["view"]["requests"]:
+        target = f" ({answer['name']})" if answer.get("name") else ""
+        verdict = "named" if answer["status"] == "labelled" else answer["message"]
+        lines.append(f"  {answer['query']}{target}: {verdict}")
+    lines += [f"Annotated image: {paths.image}", f"Summary: {paths.summary}"]
+    return "\n".join(lines)
 
 
 def format_inspect_summary(result: InspectionResult) -> str:

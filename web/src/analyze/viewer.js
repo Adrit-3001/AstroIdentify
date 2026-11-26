@@ -34,9 +34,7 @@ export function createViewer({ frame, image, markersSvg, labelsLayer }) {
 
   /** Show a result over the image at `imageUrl`; resolves when the image has loaded. */
   function show(newResult, imageUrl, altText) {
-    result = newResult;
-    clear();
-    const { width: W, height: H } = result.image;
+    const { width: W, height: H } = newResult.image;
     frame.style.setProperty('--ar', `${W} / ${H}`);
     frame.style.setProperty('--ar-num', String(W / H));
     markersSvg.setAttribute('viewBox', `0 0 ${W} ${H}`);
@@ -44,7 +42,31 @@ export function createViewer({ frame, image, markersSvg, labelsLayer }) {
     image.alt = altText;
     image.width = W;
     image.height = H;
+    draw(newResult);
 
+    resizeObserver?.disconnect();
+    resizeObserver = new ResizeObserver(() => layout());
+    resizeObserver.observe(frame);
+
+    return new Promise((resolve) => {
+      image.onload = () => {
+        layout();
+        resolve();
+      };
+      image.onerror = () => resolve();
+      image.src = imageUrl;
+    });
+  }
+
+  /** Replace the markers and labels (same image, other display options). */
+  function update(newResult) {
+    draw(newResult);
+    layout();
+  }
+
+  function draw(newResult) {
+    result = newResult;
+    clear();
     const layers = {
       detection: svg('g', { class: 'm-layer m-layer--detections' }, markersSvg),
       star: svg('g', { class: 'm-layer m-layer--stars' }, markersSvg),
@@ -99,19 +121,6 @@ export function createViewer({ frame, image, markersSvg, labelsLayer }) {
       }
       items.push(item);
     }
-
-    resizeObserver?.disconnect();
-    resizeObserver = new ResizeObserver(() => layout());
-    resizeObserver.observe(frame);
-
-    return new Promise((resolve) => {
-      image.onload = () => {
-        layout();
-        resolve();
-      };
-      image.onerror = () => resolve();
-      image.src = imageUrl;
-    });
   }
 
   /** Marker sizes (image px) for the current display scale. */
@@ -190,5 +199,5 @@ export function createViewer({ frame, image, markersSvg, labelsLayer }) {
     image.removeAttribute('src');
   }
 
-  return { show, setMode, highlight, reset, layout };
+  return { show, update, setMode, highlight, reset, layout };
 }

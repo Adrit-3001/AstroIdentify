@@ -1,10 +1,12 @@
 /**
  * The upload workspace: choose a file -> upload -> follow the analysis -> view and download.
  *
- * The current job id lives in the address (#job=<id>), so reloading the page or coming back
- * later resumes the same analysis (until it expires on the server).
+ * The current job id and display options live in the address
+ * (#job=<id>&types=...&brightest=...&label=...), so reloading the page or coming back later
+ * resumes the same analysis with the same choices (until it expires on the server).
  */
-import { annotatedDownloadUrl, fetchConfig, fetchJob, originalUrl, uploadImage } from './api.js';
+import { annotatedDownloadUrl, fetchConfig, fetchJob, fetchView, originalUrl, uploadImage } from './api.js';
+import { createOptions, DEFAULT_OPTIONS, isDefault, optionsFromParams, optionsToParams } from './options.js';
 import { renderPanel } from './panel.js';
 import { createViewer } from './viewer.js';
 
@@ -38,7 +40,8 @@ const els = {
   progressFigure: $('progress-figure'),
   stages: $('stages'),
   download: $('download'),
-  panel: $('result-panel'),
+  panelOutcome: $('panel-outcome'),
+  panelDetails: $('panel-details'),
   failedMessage: $('failed-message'),
 };
 
@@ -49,8 +52,13 @@ const viewer = createViewer({
   labelsLayer: $('viewer-labels'),
 });
 
+const options = createOptions($('view-options'), (next) => applyOptions(next));
+
 const POLL_MS = 1500;
 const state = {
+  job: null,
+  options: { ...DEFAULT_OPTIONS },
+  viewRequest: 0,
   config: null,
   file: null,
   previewUrl: null,
@@ -95,9 +103,9 @@ function setUploadError(message) {
   els.uploadError.hidden = !message;
 }
 
-function setJobInAddress(id) {
+function setJobInAddress(id, viewOptions = DEFAULT_OPTIONS) {
   const url = new URL(window.location.href);
-  url.hash = id ? `job=${id}` : '';
+  url.hash = id ? optionsToParams(viewOptions, new URLSearchParams({ job: id })).toString() : '';
   history.replaceState(null, '', id ? url : url.pathname);
 }
 
@@ -313,14 +321,47 @@ async function poll() {
 
 async function showResult(job) {
   stopTimers();
-  const result = job.result;
+  state.job = job;
   showView('result');
   setMode('annotated');
-  els.download.href = annotatedDownloadUrl(job.id);
   const stem = (job.filename || 'image').replace(/\.[^.]+(\.gz)?$/i, '');
   els.download.setAttribute('download', `${stem}-annotated.png`);
-  renderPanel(els.panel, result, job, (id) => viewer.highlight(id));
-  await viewer.show(result, originalUrl(job.id), `Analyzed image: ${job.filename}`);
+  // job.result is the default view; other choices (from the address) are fetched.
+  state.viewRequest++;
+  showViewResult(job.result, DEFAULT_OPTIONS);
+  await viewer.show(job.result, originalUrl(job.id), `Analyzed image: ${job.filename}`);
+  if (!isDefault(state.options)) applyOptions(state.options);
+}
+
+/** Show a result for display options in the panel, options and download link. */
+function showViewResult(result, viewOptions) {
+  const job = state.job;
+  els.download.href = annotatedDownloadUrl(job.id, optionsToParams(viewOptions));
+  renderPanel(
+    { outcome: els.panelOutcome, details: els.panelDetails },
+    result,
+    job,
+    (id) => viewer.highlight(id),
+  );
+  if (result.view) options.update(result.view, viewOptions);
+}
+
+/** Fetch and show the result for new display options (the latest choice wins). */
+async function applyOptions(next) {
+  if (!state.job) return;
+  state.options = next;
+  setJobInAddress(state.job.id, next);
+  const request = ++state.viewRequest;
+  let result;
+  try {
+    result = isDefault(next) ? state.job.result : await fetchView(state.job.id, optionsToParams(next));
+  } catch (error) {
+    if (request === state.viewRequest) options.showError(error.message);
+    return;
+  }
+  if (request !== state.viewRequest) return; // a newer choice was made meanwhile
+  showViewResult(result, next);
+  viewer.update(result);
 }
 
 function setMode(mode) {
@@ -339,6 +380,8 @@ function showFailed(message) {
 function analyzeAnother() {
   stopTimers();
   state.jobId = null;
+  state.job = null;
+  state.options = { ...DEFAULT_OPTIONS };
   state.file = null;
   state.elapsed = null;
   setJobInAddress(null);
@@ -368,9 +411,11 @@ async function init() {
     setUploadError(error.message);
     els.chooseButton.disabled = true;
   }
-  const match = window.location.hash.match(/job=([0-9a-f]{32})/);
-  if (match && state.config) {
-    state.jobId = match[1];
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const jobId = params.get('job');
+  if (jobId && /^[0-9a-f]{32}$/.test(jobId) && state.config) {
+    state.jobId = jobId;
+    state.options = optionsFromParams(params);
     showProgress({ filename: '' });
     renderStages(null);
     poll();

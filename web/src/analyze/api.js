@@ -26,6 +26,14 @@ async function getJson(url) {
     // A plain static server answers /api/... with an HTML 404 page.
     throw new ApiError(SERVER_MISSING, response.status);
   }
+  if (response.status === 404 && body?.error === 'Unknown API endpoint.') {
+    // The page is newer than the running server (started before an update).
+    throw new ApiError(
+      'The analysis server is running an older version of AstroIdentify. Stop it and start ' +
+        '“astroidentify serve” again, then reload this page.',
+      404,
+    );
+  }
   if (!response.ok) throw new ApiError(body?.error || `Request failed (${response.status}).`, response.status);
   return body;
 }
@@ -69,5 +77,15 @@ export function uploadImage(file, onProgress) {
   });
 }
 
+/** The result for display options (query parameters from options.js). */
+export function fetchView(id, params) {
+  return getJson(`/api/jobs/${encodeURIComponent(id)}/view?${params}`);
+}
+
 export const originalUrl = (id) => `/api/jobs/${id}/original.png`;
-export const annotatedDownloadUrl = (id) => `/api/jobs/${id}/annotated.png?download=1`;
+/** The annotated PNG for the same display options as the preview. */
+export const annotatedDownloadUrl = (id, params = new URLSearchParams()) => {
+  const query = new URLSearchParams(params);
+  query.set('download', '1');
+  return `/api/jobs/${id}/annotated.png?${query}`;
+};

@@ -54,6 +54,50 @@ the same marker list as the preview.
 - Blind solves can be wrong. A sky position not confirmed by Gaia DR3 is labelled
   unconfirmed in the results.
 
+### Choosing what's shown (display options)
+
+Beside the result, **Choose what's shown** changes the preview and the downloaded PNG together:
+
+- **Show:** tick the kinds of marker to keep, such as galaxies, nebulae, planetary nebulae,
+  star clusters, stars (detections matched to Gaia DR3) and other points of light. Only kinds
+  present in the image are listed, with their counts.
+- **Only name the brightest N:** names only the N brightest of what may be named, ranked by
+  catalogued magnitude. Stars use Gaia G; other objects use SIMBAD V, or B when V is missing.
+  Objects with no catalogued magnitude come last. Stars without a catalogued name are named
+  by their catalogue ID (e.g. `TYC 2642-385-1`, else Gaia DR3); the default view names only
+  stars with a name. Markers are not removed.
+- **Also name a particular object:** a name, SIMBAD main ID, alias, common name or Gaia DR3
+  source ID (`M 57`, `M57`, `Ring Nebula`, `NGC 6720`, `HD 183987`, `2026097087595219840`).
+  Names are matched exactly, ignoring case and spaces; there is no fuzzy matching. The object
+  is shown even when its type is unticked. Each name gets an answer: named, ambiguous, outside
+  the image, not a kind that is marked, or not detected.
+
+What may be named never changes. An object is named only when the evidence step found image
+support for it (strong, moderate or weak). A star is named only when a detection was matched
+to it in Gaia DR3. A request for anything else is answered with the reason and not named.
+For example, a very bright star that is saturated and split into several detections is never
+matched to Gaia, so it can't be named. The options only choose among the saved results:
+nothing is re-measured, and no upstream step sees them.
+
+The choices are kept in the page address (`#job=…&types=galaxy,star&brightest=5&label=M57`).
+The API is `GET /api/jobs/<id>/view?types=…&brightest=…&label=…`, and `annotated.png` takes the
+same parameters. The worker saves every candidate marker in `result/analysis.json`. Jobs
+analysed before this feature existed show only the default view.
+
+The same options are available on the command line, from saved pipeline outputs:
+
+```bash
+astroidentify annotate data/raw/m57.png --objects outputs/m57-objects \
+    --evidence outputs/m57-evidence --types planetary_nebula,galaxy,star \
+    --brightest 5 --label "Ring Nebula" --label Vega -o outputs/m57-annotated
+```
+
+This writes `annotated.png` and `annotation.json`, which holds the options, every marker and
+the answer to each requested name. Detections, astrometry and catalogue inputs default to
+those the identification recorded. Without `--evidence`, no catalogued object can be named.
+In a run file, add an `[annotate]` section: lists repeat the option, as in
+`label = ["M 57", "Albireo"]`.
+
 ## Quick start: process an image with one run file
 
 Instead of running `detect`, `solve`, `catalog-match`, `identify`, `assess` and
@@ -70,15 +114,16 @@ astroidentify run my-image.toml               # run them
   - `name`: output prefix, default the image file name;
   - `output_root`: default `outputs`;
   - `steps`: default detect → solve → catalog-match → identify → assess, plus
-    `inspect-object` when it names an object;
+    `inspect-object` when it names an object and `annotate` when it has an `[annotate]`
+    section;
   - `verbose`.
 - **Step sections.** Each `[step]` section takes that command's normal options:
   `detection_sigma = 4` means `--detection-sigma 4`, `no_cache = true` means `--no-cache`,
   and a missing key keeps the default. `astroidentify <step> --help` lists the options. An
   unknown option stops the run with that command's own error message.
 - **Wiring.** Outputs go to `<output_root>/<name>-detection`, `-astrometry`, `-catalog`,
-  `-objects`, `-evidence` and `-inspect-<object>`. Each step is given the previous steps'
-  outputs automatically, and an explicit path in a section overrides that.
+  `-objects`, `-evidence`, `-inspect-<object>` and `-annotated`. Each step is given the
+  previous steps' outputs automatically, and an explicit path in a section overrides that.
 - **Partial runs.** Steps whose inputs already exist can run on their own, e.g.
   `steps = ["inspect-object"]` with `object = ["NGC 7000", "Albireo"]`.
 - **Failures.** Steps always run in pipeline order and the run stops at the first failing

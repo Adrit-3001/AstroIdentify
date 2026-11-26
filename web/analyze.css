@@ -514,6 +514,101 @@ body.ws {
 .objects__support--weak { color: #e3cf86; }
 .objects__note { font-size: 0.8rem; color: var(--text-faint); }
 
+/* ---- Display options ---- */
+
+.options__label {
+  margin: 0.2rem 0 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.options__label:not(:first-of-type) { margin-top: 0.9rem; }
+.options__types { display: grid; gap: 2px; margin-bottom: 0.4rem; }
+.check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 32px;
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+.check input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); flex: none; }
+.check__swatch { width: 10px; height: 10px; border-radius: 50%; background: var(--c); flex: none; }
+.check__count {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+}
+.options__row { display: flex; align-items: center; gap: 8px; margin-bottom: 0.4rem; }
+.options__row--check { justify-content: space-between; }
+.options input[type='number'],
+.options input[type='text'] {
+  min-height: 36px;
+  padding: 0.35em 0.7em;
+  border: 1px solid rgba(200, 212, 255, 0.3);
+  border-radius: 8px;
+  background: rgba(14, 18, 36, 0.8);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.92rem;
+}
+.options input[type='number'] { width: 5.2em; font-variant-numeric: tabular-nums; }
+.options input[type='number']:disabled { opacity: 0.45; }
+.options input[type='text'] { flex: 1; min-width: 0; }
+.options input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.options__request { margin-top: 0.9rem; }
+.btn--small { min-height: 36px; padding: 0.35em 1em; font-size: 0.9rem; }
+.options__error { margin: 0 0 0.6rem; color: #ffc9a8; font-size: 0.85rem; }
+.options__reset {
+  margin-top: 0.4rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.86rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.options__reset:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.requests { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.requests__item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--text-faint);
+  border-radius: 8px;
+}
+.requests__item--labelled { border-left-color: #8fd4a8; }
+.requests__item--not_detected,
+.requests__item--not_annotated,
+.requests__item--ambiguous { border-left-color: #e3cf86; }
+.requests__item--outside,
+.requests__item--not_found { border-left-color: #ffb18a; }
+.requests p { margin: 0; }
+.requests__name { font-weight: 600; font-size: 0.92rem; overflow-wrap: anywhere; }
+.requests__name span { font-weight: 400; color: var(--text-muted); }
+.requests__status { color: var(--text-muted); font-size: 0.83rem; }
+.requests__remove {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.requests__remove:hover { background: rgba(185, 200, 255, 0.1); color: var(--text); }
+.requests__remove:focus-visible { outline: 2px solid var(--accent); }
+
 /* ---- Failed ---- */
 
 .failed {

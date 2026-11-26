@@ -32,6 +32,7 @@ STEPS: dict[str, str] = {
     "identify": "objects",
     "assess": "evidence",
     "inspect-object": "inspect",
+    "annotate": "annotated",
 }
 DEFAULT_STEPS = ("detect", "solve", "catalog-match", "identify", "assess")
 TOP_LEVEL_KEYS = {"image", "name", "output_root", "steps", "verbose", *STEPS}
@@ -65,6 +66,8 @@ def load_run_config(path: str | Path) -> dict[str, Any]:
         steps = list(DEFAULT_STEPS)
         if (config.get("inspect-object") or {}).get("object"):
             steps.append("inspect-object")
+        if "annotate" in config:
+            steps.append("annotate")
     if not isinstance(steps, list) or not all(isinstance(s, str) for s in steps):
         raise ConfigurationError(f"{path}: 'steps' must be a list of step names")
     bad = [s for s in steps if s not in STEPS]
@@ -86,7 +89,8 @@ def _slug(text: str) -> str:
 
 
 def _options(section: dict[str, Any]) -> tuple[list[str], set[str]]:
-    """CLI arguments for a step section, and the option names it sets."""
+    """CLI arguments for a step section, and the option names it sets. A list repeats the
+    option once per item (``label = ["M 57", "Albireo"]``: ``--label "M 57" --label Albireo``)."""
     args, names = [], set()
     for key, value in section.items():
         option = "--" + key.replace("_", "-")
@@ -95,8 +99,13 @@ def _options(section: dict[str, Any]) -> tuple[list[str], set[str]]:
             args.append(option)
         elif value is False or value is None:
             continue
-        elif isinstance(value, list | dict):
-            raise ConfigurationError(f"option {key!r}: lists/tables are not supported")
+        elif isinstance(value, dict) or (
+            isinstance(value, list) and any(isinstance(v, list | dict) for v in value)
+        ):
+            raise ConfigurationError(f"option {key!r}: tables and nested lists are not supported")
+        elif isinstance(value, list):
+            for item in value:
+                args += [option, str(item)]
         else:
             args += [option, str(value)]
     return args, names
@@ -116,6 +125,7 @@ def build_commands(config: dict[str, Any]) -> list[list[str]]:
     astrometry = available("solve")
     catalog = available("catalog-match")
     objects = available("identify")
+    evidence = available("assess")
     verbose = ["-v"] * int(config.get("verbose") or 0)
 
     commands = []
@@ -139,6 +149,9 @@ def build_commands(config: dict[str, Any]) -> list[list[str]]:
                     '[inspect-object] needs object = "NAME" (or a list of names)'
                 )
             wired = [("--objects", objects), ("--catalog", catalog)]
+        elif step == "annotate":
+            wired = [("--objects", objects), ("--evidence", evidence), ("--catalog", catalog),
+                     ("--astrometry", astrometry), ("--detections", detections)]  # fmt: skip
         user_args, user_names = _options(section)
         for target in targets:
             args = [step, image]

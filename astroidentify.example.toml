@@ -50,3 +50,10 @@ object = "NGC 7000"           # or a list: ["NGC 7000", "Albireo"]
 # softening = 0.05
 # reference_stars = 15
 # label_reference_stars = true
+
+# Annotated copy with display options (add this section to run it; see `astroidentify
+# annotate --help`). Objects are named only when the image shows them.
+# [annotate]
+# types = ["galaxy", "nebula", "planetary_nebula", "star_cluster", "star"]
+# brightest = 10              # name only the 10 brightest
+# label = ["M 57", "Albireo"] # also name these, if they were detected
