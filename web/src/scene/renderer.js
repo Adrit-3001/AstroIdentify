@@ -4,7 +4,7 @@
  * evaluates the timelines and passes the results in.
  */
 import { createIntroGeometry } from '../intro/geometry.js';
-import { IDENTITY } from '../math3.js';
+import { apply, IDENTITY } from '../math3.js';
 import { createComet } from './comet.js';
 import { createView } from './composition.js';
 import { createDeepSky } from './deepsky.js';
@@ -34,6 +34,7 @@ export function createRenderer(canvas, config, quality, { introEnabled }) {
   const comet = introEnabled ? createComet(gl, config, quad) : null;
   let view = null;
   let intro = null;
+  let anchor = null; // measured wordmark (comet start and loop box), view fractions
 
   /** Match the drawing buffer to the canvas's CSS size and recompose if needed. */
   function resize(cssWidth, cssHeight, devicePixelRatio) {
@@ -44,10 +45,29 @@ export function createRenderer(canvas, config, quality, { introEnabled }) {
     canvas.width = width;
     canvas.height = height;
     view = createView(config, width, height, pixelRatio);
-    intro = introEnabled ? createIntroGeometry(config, view) : null;
+    intro = introEnabled ? createIntroGeometry(config, view, anchor ?? undefined) : null;
     starfield.prepare(view, intro?.tanRange);
     deepSky.prepare(view);
     return view;
+  }
+
+  /** Use the measured wordmark (from wordmark.js) for the comet's start and loop. */
+  function setIntroAnchor(measured) {
+    anchor = measured;
+    if (!introEnabled || !view) return;
+    intro = createIntroGeometry(config, view, anchor ?? undefined);
+    starfield.prepare(view, intro.tanRange);
+  }
+
+  /** The comet nucleus on screen at intro time g for a camera turn progress, CSS px. */
+  function cometScreenPosition(g, turn) {
+    if (!intro) return null;
+    const q = apply(intro.rotationAt(turn), intro.positionAt(g));
+    if (q[2] <= 0.05) return null;
+    return [
+      (view.center[0] + (view.focal * q[0]) / q[2]) / view.pixelRatio,
+      (view.center[1] + (view.focal * q[1]) / q[2]) / view.pixelRatio,
+    ];
   }
 
   /**
@@ -57,7 +77,7 @@ export function createRenderer(canvas, config, quality, { introEnabled }) {
    * @param {number} look.brightness       overall star brightness
    * @param {number} [look.starReveal]     0..1, brightest stars first
    * @param {number} [look.deepSky]        0..1 galaxy / nebula visibility
-   * @param {{g: number, visibility: number, glow: number}} [look.comet]
+   * @param {{g: number, visibility: number, ignition: number, glow: number}} [look.comet]
    */
   function render(cam, look) {
     const [bgR, bgG, bgB] = config.background.color;
@@ -108,6 +128,8 @@ export function createRenderer(canvas, config, quality, { introEnabled }) {
   return {
     gl,
     resize,
+    setIntroAnchor,
+    cometScreenPosition,
     render,
     get view() {
       return view;

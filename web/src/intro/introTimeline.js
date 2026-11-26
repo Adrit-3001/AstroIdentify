@@ -48,6 +48,7 @@ export function createIntroTimeline(config, flight, { enabled }) {
       deepSkyVisibility: () => 1,
       turnProgress: () => 1,
       cometVisibility: () => 0,
+      ignitionAt: () => 0,
       glowAt: () => 0,
       moments: {},
     };
@@ -55,7 +56,10 @@ export function createIntroTimeline(config, flight, { enabled }) {
 
   const c = config.cometIntro;
   const handoffAt = c.handoff.flightStartsAtSeconds;
-  const departure = (c.path.find((k) => k.departs) ?? c.path[Math.floor(c.path.length / 2)]).at;
+  const detach = c.path.detachAtSeconds;
+  // The comet starts pulling away when the loop ends.
+  const departure = c.path.loop.length ? c.path.loop[c.path.loop.length - 1].at : detach;
+  const igniteStart = detach + c.ignition.delaySeconds;
   const turnStart = departure + c.cameraFollow.delaySeconds;
   const emergeStart = turnStart + c.stars.emergeOffsetSeconds;
   const deepSkyStart = turnStart + c.deepSky.fadeInOffsetSeconds;
@@ -83,8 +87,10 @@ export function createIntroTimeline(config, flight, { enabled }) {
       const start = handoffAt + c.fadeOut.afterHandoffSeconds;
       return 1 - smootherstep(start, start + c.fadeOut.seconds, g);
     },
-    /** Extra nucleus brightness (0 = none) from the shine near closest approach. */
+    /** 0 before detach; rises to 1 as the detached dot becomes the comet. */
+    ignitionAt: (g) => smootherstep(igniteStart, igniteStart + c.ignition.seconds, g),
+    /** Extra nucleus brightness (0 = none) from the shine. */
     glowAt: (g) => c.glow.intensity * Math.exp(-0.5 * ((g - c.glow.peakAtSeconds) / glowSigma) ** 2),
-    moments: { departure, turnStart, handoffAt, leadInStart: handoffAt - c.handoff.leadInSeconds },
+    moments: { detach, departure, turnStart, handoffAt, leadInStart: handoffAt - c.handoff.leadInSeconds },
   };
 }

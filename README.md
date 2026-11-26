@@ -1189,7 +1189,7 @@ ASTROIDENTIFY_LIVE_SIMBAD=1 pytest tests/objects/test_live_simbad.py
 ```
 
 **Landing page.** `web/` holds a static landing page (no build step). Run
-`python3 -m http.server 8765 -d web` and open <http://127.0.0.1:8765/>. Its settings live in
+`python3 web/serve.py` and open <http://127.0.0.1:8765/>. Its settings live in
 `web/src/config.js`; see `web/README.md`.
 
 Tests generate synthetic star fields with fixed seeds, so they need no data files. Put your

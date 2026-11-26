@@ -14,7 +14,7 @@
  *   short  fraction of the viewport's shorter side
  *
  * First things to try:
- *   comet path      cometIntro.path (positions + times), cometIntro.glow (shine)
+ *   comet path      cometIntro.path (detach time, loop around the word, exit), cometIntro.glow
  *   camera catch-up cometIntro.cameraFollow.delaySeconds / stiffness
  *   slower flight   flight.peakSpeed down (e.g. 40) and/or flight.slowdownSeconds up (e.g. 4.5)
  *   shorter trails  trails.exposureSeconds down (e.g. 0.035) and/or trails.maxLengthPx down
@@ -24,47 +24,75 @@ export const LANDING_CONFIG = {
   /**
    * Comet intro: plays before the flight and hands over to it while already moving.
    *
-   *   0 s ─ wordmark on black ─ comet enters ─ glides + glows ─ pulls away ─┐
-   *         camera follows (turn) ─ stars slide sideways ─ camera accelerates ┘─▶ flight
+   *   0 s ─ wordmark on black ─ the dot of the i detaches, ignites into a comet ─ loops around
+   *         the word ─ flies off ─┐ camera follows (turn) ─ stars slide sideways ─ camera
+   *         accelerates ──────────┘─▶ flight
    *
-   * All times are seconds since the first frame. Path positions are `view` fractions of the
-   * screen *as seen before the camera turns* (x 0 = left edge, y 0 = top edge; values outside
-   * 0–1 are off-screen), plus a depth in u, so the same path works on any screen size.
-   * enabled: false gives the original opening (flight from the first frame).
+   * All times are seconds since the first frame. enabled: false gives the original opening
+   * (flight from the first frame).
    */
   cometIntro: {
     enabled: true,
 
     /** Centered wordmark shown on black from the first paint. */
     logo: {
-      /** When the wordmark starts fading, s. This is the logo hold. Range 1–3. */
-      fadeStartSeconds: 1.75,
+      /** When the wordmark starts fading, s. Keep it after the loop ends. Range 1.5–4. */
+      fadeStartSeconds: 2.6,
       /** Fade duration, s. Range 0.3–1.5. */
       fadeSeconds: 0.65,
     },
 
     /**
-     * Comet path keyframes: where the comet is (x, y view fractions; depth u, camera distance)
-     * and when (`at`, s). Speed through the curve comes from key spacing: keys close together in
-     * space = slow glide, far apart = fast. Mark the key where the comet starts pulling away
-     * with `departs: true`; the camera follow delay counts from it. The last two keys should
-     * share x/y: that ray is the outbound heading, and the camera turns until that heading
-     * becomes the flight's focus of expansion.
+     * Comet path. It starts exactly on the i's dot (measured from the rendered text), at rest.
+     * Speed through the curve comes from key spacing: keys far apart in space but close in time
+     * are fast. The path is a smooth spline through all keys.
      */
-    path: [
-      { at: 0.55, x: -0.14, y: -0.12, depth: 7 },
-      { at: 1.15, x: 0.35, y: 0.3, depth: 6.2 },
-      { at: 1.55, x: 0.46, y: 0.365, depth: 5.8 },
-      { at: 1.9, x: 0.555, y: 0.38, depth: 6.3, departs: true },
-      { at: 2.25, x: 0.72, y: 0.33, depth: 10 },
-      { at: 2.65, x: 0.84, y: 0.28, depth: 22 },
-      { at: 3.05, x: 0.84, y: 0.28, depth: 48 },
-    ],
+    path: {
+      /** When the dot detaches from the i, s. Before this the wordmark is untouched. */
+      detachAtSeconds: 0.2,
+      /** Comet distance during the loop, u. Sets its size; tail and glow are tuned at 6. */
+      loopDepth: 6,
+      /**
+       * The loop around the word, in word units: x -1 = left end of the word, +1 = right end;
+       * y -1 = top of the letters, +1 = bottom of the letters (descender). Outside ±1 is clear
+       * of the text. It scales with the word, so it fits on any screen. The last loop key is
+       * where the comet starts pulling away; the camera follow delay counts from it.
+       */
+      loop: [
+        { at: 1.05, x: 0.81, y: -2.37 },
+        { at: 1.27, x: 1.36, y: -0.75 },
+        { at: 1.48, x: 1.28, y: 1.23 },
+        { at: 1.69, x: 0.47, y: 2.73 },
+        { at: 1.9, x: -0.59, y: 2.62 },
+        { at: 2.11, x: -1.33, y: 0.98 },
+        { at: 2.32, x: -1.28, y: -1.23 },
+        { at: 2.53, x: -0.47, y: -2.73 },
+        { at: 2.74, x: 0.59, y: -2.62 },
+      ],
+      /**
+       * The exit: view fractions of the screen as seen before the camera turns (x 0 = left,
+       * y 0 = top), plus depth in u. The last two keys share x/y: that ray is the outbound
+       * heading, and the camera turns until it becomes the flight's focus of expansion.
+       */
+      exit: [
+        { at: 3.05, x: 0.72, y: 0.33, depth: 10 },
+        { at: 3.45, x: 0.84, y: 0.28, depth: 22 },
+        { at: 3.85, x: 0.84, y: 0.28, depth: 48 },
+      ],
+    },
 
-    /** Nucleus shine near closest approach: a brief local brightening while it keeps moving. */
+    /** The detached dot turns into the comet: it fades into a glowing nucleus as the tail grows. */
+    ignition: {
+      /** Delay after detach before it starts glowing, s. */
+      delaySeconds: 0.1,
+      /** Time to become a full comet, s. Range 0.2–1. */
+      seconds: 0.45,
+    },
+
+    /** Nucleus shine: a brief local flare while it keeps moving (by default, as it ignites). */
     glow: {
-      /** When the shine peaks, s. Place it inside the slow glide. */
-      peakAtSeconds: 1.5,
+      /** When the shine peaks, s. */
+      peakAtSeconds: 1.1,
       /** Width of the shine (full width at half maximum), s. Range 0.2–1. */
       durationSeconds: 0.5,
       /** Extra nucleus brightness at the peak (0 = no shine; 1.5 = 2.5x). Range 0–4. */
@@ -82,7 +110,7 @@ export const LANDING_CONFIG = {
     coma: { radiusPx: 12, brightness: 0.3, color: [0.62, 0.84, 1.0] },
     /** Tapered tail made of particles laid along the path the comet has just travelled. */
     tail: {
-      /** Tail length along the path, as a fraction of the screen's short side at closest approach. */
+      /** Tail length along the path, as a fraction of the screen's short side at loop depth. */
       lengthShortSide: 0.32,
       /** Particle count. More = smoother tail. Range 60–400. */
       particleCount: 180,
@@ -105,7 +133,7 @@ export const LANDING_CONFIG = {
 
     /** The camera turns to follow the comet's outbound heading like a damped spring. */
     cameraFollow: {
-      /** Pause after the comet `departs` before the camera starts turning, s. Range 0.1–0.6. */
+      /** Pause after the loop's last key before the camera starts turning, s. Range 0.1–0.6. */
       delaySeconds: 0.25,
       /** How quickly the camera catches up, 1/s². Higher = quicker turn. Range 6–40. */
       stiffness: 14,
@@ -131,8 +159,11 @@ export const LANDING_CONFIG = {
      * and the flight below takes over (its timings are unchanged).
      */
     handoff: {
-      /** When the flight's own timeline starts, s. Total intro length. Range 2–4. */
-      flightStartsAtSeconds: 2.95,
+      /**
+       * When the flight's own timeline starts, s: the total intro length. Keep it at least
+       * leadInSeconds after the camera starts turning. Range 2.5–5.
+       */
+      flightStartsAtSeconds: 3.8,
       /** Forward acceleration from rest before that, s. Range 0.4–1.5. */
       leadInSeconds: 0.8,
       /** Shape of that acceleration: higher = gentler start, stronger finish. Range 1.5–4. */

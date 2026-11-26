@@ -42,8 +42,15 @@
     <div class="quiet-zone" aria-hidden="true"></div>
     <div class="vignette" aria-hidden="true"></div>
     <!-- Comet-intro wordmark: painted with the page (no script needed), faded by the timeline.
-         Hidden from assistive tech because the hero <h1> carries the same name. -->
-    <div class="intro-mark" aria-hidden="true"><span>AstroIdentify</span></div>
+         Hidden from assistive tech because the hero <h1> carries the same name.
+         The lowercase i is wrapped so its dot can detach: the in-word i gets its dot clipped
+         off, and __tittle (a copy of the same glyph clipped to show only its dot) moves away.
+         The empty __baseline spans let the script measure the exact text baseline. -->
+    <div class="intro-mark" aria-hidden="true">
+      <span class="intro-mark__word">AstroIdent<span class="intro-mark__i">i</span>fy<span class="intro-mark__baseline"></span></span>
+      <!-- Inline style: hidden even if an older cached styles.css is in use. -->
+      <span class="intro-mark__tittle" style="position: fixed; left: 0; top: 0; visibility: hidden"><span>i</span><span class="intro-mark__baseline"></span></span>
+    </div>
 
     <main>
       <section class="hero" aria-labelledby="hero-title">

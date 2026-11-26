@@ -8,7 +8,7 @@ No build step and no dependencies.
 ES modules don't load from `file://`, so serve the folder:
 
 ```bash
-python3 -m http.server 8765 -d web
+python3 web/serve.py
 ```
 
 Then open <http://127.0.0.1:8765/>. Reload to replay the opening.
@@ -29,8 +29,10 @@ Motion tests run in the browser at <http://127.0.0.1:8765/tests/> (the page titl
   144 Hz), trail lengths on the first frame, at peak and when settled, the final-second
   deceleration, and the text reveal schedule.
 - **The comet intro:**
-  - the camera stays still while the comet enters;
-  - the comet slows and shines while moving, then accelerates before the camera turns;
+  - the camera stays still while the dot detaches and loops;
+  - the comet starts exactly on the i's dot, from rest, and ignites while moving;
+  - it loops once around the word without touching the letters, then accelerates away
+    before the camera turns;
   - the launch into the flight is one continuous acceleration;
   - star motion goes from a sideways sweep to radial flow without a cut;
   - trail lengths have no jumps;
@@ -44,7 +46,10 @@ with units and ranges. Start with these:
 
 | Goal | Change |
 | --- | --- |
-| Move the comet's flyby | `cometIntro.path`: keyframes `{ at, x, y, depth }` in screen fractions |
+| When the dot leaves the i | `cometIntro.path.detachAtSeconds` |
+| Shape and speed of the loop | `cometIntro.path.loop`: keys `{ at, x, y }` in word units |
+| Where it flies off to | `cometIntro.path.exit`: keys `{ at, x, y, depth }` in screen fractions |
+| Dot-to-comet transition | `cometIntro.ignition.delaySeconds`, `.seconds` |
 | Comet shine | `cometIntro.glow.intensity`, `.peakAtSeconds`, `.durationSeconds` |
 | How fast the camera catches up | `cometIntro.cameraFollow.delaySeconds`, `.stiffness`, `.dampingRatio` |
 | Shorter or longer intro | `cometIntro.handoff.flightStartsAtSeconds`, `cometIntro.logo.fadeStartSeconds` |
@@ -66,14 +71,26 @@ is no second launch.
 Changing `flight.slowdownSeconds` also moves the text reveal, because the reveal is set as a
 fraction of the slowdown (`textReveal.startAtSlowdownProgress`).
 
-**Comet path coordinates.**
-- `x`/`y` are fractions of the screen as seen before the camera turns: 0 is the left or top
-  edge, 1 the right or bottom edge, and values outside 0–1 are off-screen. `depth` is the
-  comet's distance in world units.
-- Keys close together in space make a slow glide; keys far apart make it fast.
-- The last two keys share `x`/`y`. That ray is the comet's outbound heading. The camera's
-  starting direction is derived so that turning to follow that ray lines it up with the
+**The comet's path** (`cometIntro.path`) is one smooth spline through three groups of keys:
+- **Start:** the dot above the lowercase i. Its position is measured from the rendered text,
+  so it is exact in whatever font is in use. The comet leaves it from rest at
+  `detachAtSeconds`.
+- **Loop** (`loop`), in word units: x −1 is the left end of the word and +1 the right end;
+  y −1 is the top of the letters and +1 the bottom. Anything outside ±1 is clear of the text,
+  and the loop scales with the word on every screen. The last loop key is where the comet
+  starts pulling away; the camera follow delay counts from it.
+- **Exit** (`exit`), in screen fractions as seen before the camera turns, plus `depth` in
+  world units. The last two keys share `x`/`y`: that ray is the outbound heading. The
+  camera's starting direction is derived so that turning to follow it lines up with the
   flight's vanishing point.
+
+Keys far apart in space but close in time make the comet fast.
+
+**How the dot detaches** (`src/intro/wordmark.js`). The wordmark stays real HTML text.
+- At detach, the dot is clipped off the in-word i, and a copy of the same glyph, clipped to
+  show only its dot, takes its place. Together they look exactly like the original letter.
+- That copy then follows the comet's path and fades as the WebGL comet ignites in the same
+  spot. The comet's tail grows out of it.
 
 ## Structure
 
@@ -83,8 +100,9 @@ web/
   styles.css            page layout and typography
   src/config.js         all visual and motion settings
   src/timeline.js       flight: speed curve -> distance, phases, reveal schedule (pure functions of t)
-  src/intro/            comet intro: its timeline (logo, glow, camera follow, star emergence)
-                        and its view geometry (comet spline, starting camera orientation)
+  src/intro/            comet intro: its timeline (logo, ignition, glow, camera follow, stars),
+                        its view geometry (comet spline, starting camera orientation) and the
+                        wordmark's detaching dot (wordmark.js)
   src/camera.js         camera offsets and turn for a moment and one exposure earlier; pointer spring
   src/math3.js          small 3-D rotation helpers
   src/scene/            WebGL: composition/lens, star trails, galaxy and nebula, comet, renderer

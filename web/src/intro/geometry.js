@@ -5,8 +5,10 @@
  *   makes the flight heading (the settled focus of expansion) appear where the comet's outbound
  *   ray is on the starting screen. Turning the camera from there to identity therefore "follows
  *   the comet": its outbound path ends up at the flight's vanishing point.
- * - The comet path is a time-keyed cubic Hermite spline through the configured keyframes, in
- *   world axes, relative to the camera position (the comet always leads the camera).
+ * - The comet path is a time-keyed cubic Hermite spline, in world axes, relative to the camera
+ *   position (the comet always leads the camera). Its keys are: the i's dot (start, at rest),
+ *   the loop around the word (word units, mapped through the measured word box) and the exit
+ *   (view fractions).
  *
  * World axes are the settled camera's: x right, y down, z forward.
  */
@@ -15,12 +17,34 @@ import { apply, cross, dot, length, normalize, rotation, scale, sub } from '../m
 const TABLE_STEP = 1 / 500; // s
 
 /**
+ * Where the wordmark sits, in view fractions, when it could not be measured (tests, or no DOM):
+ * a centred word about 36% of the width wide.
+ */
+export function defaultWordAnchor(view) {
+  const hw = Math.min(0.42, (0.18 * 1440) / (view.width / view.pixelRatio));
+  const hh = (hw * view.width) / view.height / 5.4;
+  return { tittle: [0.5 + 0.62 * hw, 0.5 - 0.55 * hh], box: { cx: 0.5, cy: 0.5, hw, hh } };
+}
+
+/** All comet keyframes in view fractions + depth: detach point, loop, exit. */
+export function cometKeys(config, anchor) {
+  const p = config.cometIntro.path;
+  const { cx, cy, hw, hh } = anchor.box;
+  return [
+    { at: p.detachAtSeconds, x: anchor.tittle[0], y: anchor.tittle[1], depth: p.loopDepth, rest: true },
+    ...p.loop.map((k) => ({ at: k.at, x: cx + k.x * hw, y: cy + k.y * hh, depth: k.depth ?? p.loopDepth })),
+    ...p.exit.map((k) => ({ ...k })),
+  ];
+}
+
+/**
  * @param {typeof import('../config.js').LANDING_CONFIG} config
  * @param {ReturnType<typeof import('../scene/composition.js').createView>} view
+ * @param {ReturnType<typeof defaultWordAnchor>} [anchor] measured wordmark (see wordmark.js)
  */
-export function createIntroGeometry(config, view) {
+export function createIntroGeometry(config, view, anchor = defaultWordAnchor(view)) {
   const c = config.cometIntro;
-  const keys = c.path;
+  const keys = cometKeys(config, anchor);
   const { width, height, focal, center } = view;
 
   /** Camera-space direction (z = 1) of a screen point given in view fractions. */
@@ -42,8 +66,10 @@ export function createIntroGeometry(config, view) {
   const times = keys.map((k) => k.at);
   const points = keys.map((k) => apply(startToWorld, scale(viewRay(k.x, k.y), k.depth)));
   const n = points.length;
-  // Non-uniform Catmull-Rom tangents (units per second) keep velocity continuous at keys.
+  // Non-uniform Catmull-Rom tangents (units per second) keep velocity continuous at keys. The
+  // detach key has zero velocity: the dot eases off the i from rest.
   const tangents = points.map((_, i) => {
+    if (keys[i].rest) return [0, 0, 0];
     const a = Math.max(0, i - 1);
     const b = Math.min(n - 1, i + 1);
     return scale(sub(points[b], points[a]), 1 / (times[b] - times[a]));
@@ -102,6 +128,9 @@ export function createIntroGeometry(config, view) {
     return [0, 1, 2].map((j) => tablePos[lo][j] + (tablePos[hi][j] - tablePos[lo][j]) * f);
   }
 
+  const startTime = times[0];
+  const startArc = arcAt(startTime);
+
   // Closest-approach depth sets the reference scale for comet sizes and tail length.
   const referenceDepth = Math.min(...keys.map((k) => k.depth));
   const tailLength = c.tail.lengthShortSide * (view.shortSide / focal) * referenceDepth;
@@ -127,6 +156,11 @@ export function createIntroGeometry(config, view) {
   return {
     rotationAt,
     turnAngle: angle,
+    keys,
+    anchor,
+    /** When the comet leaves the i, and the arc length there (its tail never reaches back past it). */
+    startTime,
+    startArc,
     positionAt,
     arcAt,
     pointAtArc,

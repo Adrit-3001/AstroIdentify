@@ -13,6 +13,7 @@ import { createCamera } from './camera.js';
 import { LANDING_CONFIG as config } from './config.js';
 import { createReveal } from './content/reveal.js';
 import { createIntroTimeline } from './intro/introTimeline.js';
+import { createWordmark } from './intro/wordmark.js';
 import { createRenderer } from './scene/renderer.js';
 import { createTimeline } from './timeline.js';
 
@@ -60,10 +61,15 @@ function start() {
   }
   window.__landing.renderer = renderer;
   window.__landing.camera = camera;
+  const wordmark = introEnabled ? createWordmark(introMark) : null;
+  window.__landing.wordmark = wordmark;
+  // True once the intro wordmark is gone for good (faded out, skipped, or no intro).
+  let markDone = !introEnabled;
 
   if (reduced) reveal.finish();
   // Keyboard users who tab in during the opening get the page immediately.
   document.querySelector('.hero').addEventListener('focusin', () => {
+    markDone = true;
     introMark.hidden = true;
     reveal.finish();
   });
@@ -72,6 +78,9 @@ function start() {
     const rect = canvas.getBoundingClientRect();
     const view = renderer.resize(rect.width, rect.height, window.devicePixelRatio);
     root.dataset.layout = view.layoutName;
+    // The comet starts on the i's dot and loops around the word, so measure the wordmark as
+    // laid out now (font size depends on the viewport).
+    if (wordmark && !markDone) renderer.setIntroAnchor(wordmark.measure(rect.width, rect.height));
     const q = view.layout.quietZone;
     quietZone.style.setProperty('--qx', `${q.x * 100}%`);
     quietZone.style.setProperty('--qy', `${q.y * 100}%`);
@@ -79,12 +88,16 @@ function start() {
     quietZone.style.setProperty('--qry', `${q.radiusY * 100}%`);
   }
   applyLayout();
+  // Re-measure once web/system fonts are settled, in case the first layout used a fallback.
+  document.fonts?.ready.then(() => {
+    applyLayout();
+    requestFrame();
+  });
 
   const hud = params.has('hud') ? createHud() : null;
   const animate = frozenTime === null && (!reduced || config.reducedMotion.ambientDrift);
   let lastTimestamp = null;
   let pending = false;
-  let markDone = !introEnabled;
 
   function draw() {
     const g = frozenTime ?? state.time;
@@ -96,10 +109,15 @@ function start() {
       starReveal: intro.starReveal(g),
       deepSky: intro.deepSkyVisibility(g),
       comet: introEnabled
-        ? { g, visibility: intro.cometVisibility(g), glow: intro.glowAt(g) }
+        ? { g, visibility: intro.cometVisibility(g), ignition: intro.ignitionAt(g), glow: intro.glowAt(g) }
         : null,
     });
     if (!markDone) {
+      // The i's dot: untouched until detach, then it follows the comet path and hands over to
+      // the comet's nucleus as that ignites.
+      const detached = g >= intro.moments.detach;
+      const position = detached ? renderer.cometScreenPosition(g, cam.turn) : null;
+      wordmark.update(detached && position !== null, position, 1 - intro.ignitionAt(g));
       const opacity = intro.logoOpacity(g);
       introMark.style.opacity = String(opacity);
       if (opacity <= 0) {

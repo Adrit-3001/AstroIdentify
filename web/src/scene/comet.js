@@ -76,9 +76,11 @@ export function createComet(gl, config, quad) {
   /**
    * @param {ReturnType<typeof import('../intro/geometry.js').createIntroGeometry>} geometry
    * @param {number[]} rot world -> camera rotation (column-major)
-   * @param {{g: number, visibility: number, glow: number}} state
+   * @param {{g: number, visibility: number, ignition: number, glow: number}} state
    */
-  function draw(view, geometry, rot, { g, visibility, glow }) {
+  function draw(view, geometry, rot, { g, visibility: fadeOut, ignition = 1, glow }) {
+    // Nothing before the dot detaches; it brightens into a comet as it ignites.
+    const visibility = fadeOut * ignition;
     if (visibility <= 0.001) return;
     // Sizes are specified for a ~900 px short side and scale down on small screens.
     const pr = view.pixelRatio * Math.min(1, Math.max(0.55, view.shortSide / view.pixelRatio / 900));
@@ -104,12 +106,16 @@ export function createComet(gl, config, quad) {
     if (!head) return;
     const glowNorm = c.glow.intensity > 0 ? glow / c.glow.intensity : 0;
 
-    // Tail: particles flow from the nucleus back along the travelled arc.
+    // Tail: particles flow from the nucleus back along the travelled arc. It only covers the
+    // path since the dot left the i, so it grows out of the dot instead of appearing whole.
     const sNow = geometry.arcAt(g);
     const L = geometry.tailLength;
     for (const p of particles) {
       const u = (p.phase + g * c.tail.flowPerSecond) % 1; // 0 at the nucleus, 1 at the tail end
       const s = sNow - u * L;
+      const sinceStart = s - geometry.startArc;
+      if (sinceStart <= 0) continue;
+      const grow = Math.min(1, sinceStart / (0.15 * L));
       const a = project(geometry.pointAtArc(s));
       const b = project(geometry.pointAtArc(s + L * 0.02));
       if (!a || !b) continue;
@@ -122,7 +128,7 @@ export function createComet(gl, config, quad) {
       const y = a[1] + (dx / len) * spread;
       const sigma = Math.max(0.6 * pr, (c.tail.headSizePx + (c.tail.endSizePx - c.tail.headSizePx) * u) * pr * k * p.size);
       const fade = (1 - u) ** c.tail.taper * Math.min(1, u / 0.04) * Math.sqrt(Math.min(1, k));
-      push(x, y, sigma, c.tail.color, c.tail.brightness * fade * visibility);
+      push(x, y, sigma, c.tail.color, c.tail.brightness * fade * grow * grow * visibility);
     }
 
     // Coma, then nucleus: both shrink and dim as the comet recedes, so it fades into the stars.

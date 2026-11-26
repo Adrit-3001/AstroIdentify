@@ -1,6 +1,6 @@
 /**
  * Motion tests for the landing page, run in a browser (no build tools needed):
- *   python3 -m http.server 8765 -d web   then open http://127.0.0.1:8765/tests/
+ *   python3 web/serve.py   then open http://127.0.0.1:8765/tests/
  * The page title becomes "PASS" or "FAIL".
  *
  * The first group checks the flight on its own (comet intro off = the original opening); the
@@ -257,7 +257,7 @@ const intro = createIntroTimeline(config, iFlight, { enabled: true });
 const iCamera = createCamera(config, iFlight, { intro });
 const geo = createIntroGeometry(config, view);
 const H = intro.handoffAt;
-const { departure, turnStart, leadInStart } = intro.moments;
+const { detach, departure, turnStart, leadInStart } = intro.moments;
 const ci = config.cometIntro;
 
 const project = (rot, p) => {
@@ -279,42 +279,65 @@ const cometSpeed3d = (g, h = 1 / 240) => {
 /** Where the flight heading (focus of expansion) is on screen at time g. */
 const foeScreen = (g) => project(rotAt(g), [view.slope[0], view.slope[1], 1]);
 
-test('intro: opens on black with the wordmark; camera still while the comet enters', () => {
+test('intro: opens on black with the untouched wordmark; camera still during the loop', () => {
   assert(intro.logoOpacity(0) === 1, 'wordmark fully visible on the first frame');
   assert(intro.starReveal(0) === 0, 'no stars on the first frame (black)');
+  assert(intro.ignitionAt(0) === 0 && detach > 0.3, 'the dot is still on the i at first');
   assert(leadInStart >= departure, 'camera must not move forward before the comet departs');
   for (let g = 0; g < Math.min(leadInStart, turnStart); g += 0.01) {
     assert(iFlight.speedAt(g - H) === 0 && intro.turnProgress(g) === 0, `camera moved at g=${g}`);
   }
-  return `still until ${Math.min(leadInStart, turnStart).toFixed(2)} s; comet departs ${departure} s`;
+  return `dot detaches at ${detach} s; camera still until ${Math.min(leadInStart, turnStart).toFixed(2)} s`;
 });
 
-test('intro: comet glides and shines near the wordmark, then visibly accelerates before the camera turns', () => {
-  let entrance = 0;
-  for (let g = 0.75; g <= 1.0; g += 0.05) entrance = Math.max(entrance, cometScreenSpeed(g));
-  let glide = Infinity;
-  let glideAt = 0;
-  for (let g = 1.3; g <= departure; g += 0.01) {
-    const v = cometScreenSpeed(g);
-    if (v < glide) [glide, glideAt] = [v, g];
-  }
+test('intro: the comet starts exactly on the i’s dot, from rest, and ignites while moving', () => {
+  const tittlePx = [geo.anchor.tittle[0] * view.width, geo.anchor.tittle[1] * view.height];
+  const start = cometScreen(detach);
+  const offset = Math.hypot(start[0] - tittlePx[0], start[1] - tittlePx[1]);
+  assert(offset < 0.5, `comet starts ${offset.toFixed(2)} px from the dot`);
+  assert(cometScreenSpeed(detach + 0.002, 0.002) < 15, 'the dot leaves from rest');
+  assert(cometScreenSpeed(detach + 0.2) > 150, 'and is clearly moving soon after');
   const peak = ci.glow.peakAtSeconds;
-  const atPeak = cometScreenSpeed(peak);
-  const v3Glide = cometSpeed3d(glideAt);
-  const v3Turn = cometSpeed3d(turnStart);
-  assert(entrance > 2 * glide, `entrance ${entrance.toFixed(0)} px/s vs glide ${glide.toFixed(0)} px/s`);
-  assert(atPeak > 40, `comet must keep moving while it shines (${atPeak.toFixed(0)} px/s)`);
-  assert(intro.glowAt(peak) > 0.9 * ci.glow.intensity, 'glow peaks at its configured time');
-  assert(v3Turn > 2 * v3Glide, `comet should accelerate before the turn (${v3Glide.toFixed(1)} → ${v3Turn.toFixed(1)} u/s)`);
+  assert(intro.glowAt(peak) > 0.9 * ci.glow.intensity && cometScreenSpeed(peak) > 100, 'shines while moving');
+  const full = detach + ci.ignition.delaySeconds + ci.ignition.seconds;
+  assert(intro.ignitionAt(detach) === 0 && intro.ignitionAt(full) === 1, 'ignites from dot to comet');
+  return `starts ${offset.toFixed(2)} px from the dot; ${cometScreenSpeed(detach + 0.2).toFixed(0)} px/s after 0.2 s; full comet by ${full.toFixed(2)} s`;
+});
+
+test('intro: the comet loops once around the word without crossing it', () => {
+  const { cx, cy, hw, hh } = geo.anchor.box;
+  const c = [cx * view.width, cy * view.height];
+  const half = [hw * view.width, hh * view.height];
+  const loopStart = ci.path.loop[0].at;
+  let winding = 0;
+  let prevAngle = null;
+  let closest = Infinity;
+  for (let g = loopStart; g <= departure; g += 1 / 240) {
+    const p = cometScreen(g);
+    const a = Math.atan2(p[1] - c[1], p[0] - c[0]);
+    if (prevAngle !== null) winding += Math.atan2(Math.sin(a - prevAngle), Math.cos(a - prevAngle));
+    prevAngle = a;
+    // Clearance from the word's ink box, px (negative = inside it).
+    const dx = Math.abs(p[0] - c[0]) - half[0];
+    const dy = Math.abs(p[1] - c[1]) - half[1];
+    closest = Math.min(closest, Math.max(dx, dy));
+  }
+  const degrees = (Math.abs(winding) * 180) / Math.PI;
+  assert(degrees > 300, `loop winds only ${degrees.toFixed(0)}° around the word`);
+  assert(closest > 0.4 * half[1], `loop comes within ${closest.toFixed(1)} px of the letters`);
+  return `winds ${degrees.toFixed(0)}° around the word, never closer than ${closest.toFixed(0)} px to the letters`;
+});
+
+test('intro: comet visibly accelerates away before the camera turns', () => {
+  let loopSpeed = 0;
+  let samples = 0;
+  for (let g = ci.path.loop[0].at; g <= departure; g += 0.02, samples++) loopSpeed += cometSpeed3d(g);
+  loopSpeed /= samples;
+  const atTurn = cometSpeed3d(turnStart);
+  assert(atTurn > 1.5 * loopSpeed, `comet should accelerate before the turn (${loopSpeed.toFixed(1)} → ${atTurn.toFixed(1)} u/s)`);
   assert(intro.turnProgress(turnStart) === 0, 'camera has not turned yet when the comet is speeding away');
   assert(intro.turnProgress(turnStart + 0.1) < 0.06, 'turn starts gently');
-  const above = cometScreen(peak)[1] < view.center[1];
-  assert(above, 'comet passes above the wordmark');
-  return (
-    `screen speed: entrance ${entrance.toFixed(0)} px/s, slowest glide ${glide.toFixed(0)} px/s at ` +
-    `${glideAt.toFixed(2)} s, while shining ${atPeak.toFixed(0)} px/s; travel speed ${v3Glide.toFixed(1)} → ` +
-    `${v3Turn.toFixed(1)} u/s by the time the camera starts turning (${turnStart.toFixed(2)} s)`
-  );
+  return `travel speed ${loopSpeed.toFixed(1)} u/s around the loop → ${atTurn.toFixed(1)} u/s when the camera starts turning (${turnStart.toFixed(2)} s)`;
 });
 
 test('intro: handoff into the flight is one continuous launch (no pause, no second launch)', () => {
