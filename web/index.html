@@ -57,13 +57,16 @@
         <div class="hero__content">
           <h1 id="hero-title" class="hero__title" data-reveal="0">AstroIdentify</h1>
           <p class="hero__tagline" data-reveal="1">Find out what’s in your telescope images.</p>
-          <a class="hero__action" href="#how-it-works" data-reveal="2">
-            How it works
-            <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16">
-              <path d="M8 3v9M4 8.5l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6"
-                stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </a>
+          <div class="hero__actions" data-reveal="2">
+            <a class="hero__action hero__action--primary" href="analyze.html">Analyze an image</a>
+            <a class="hero__action" href="#how-it-works">
+              How it works
+              <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16">
+                <path d="M8 3v9M4 8.5l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6"
+                  stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </a>
+          </div>
         </div>
       </section>
 
@@ -71,7 +74,8 @@
         <div class="how__inner">
           <h2 id="how-title" class="how__title">How it works</h2>
           <p class="how__lede">
-            AstroIdentify is a Python command-line tool. Give it a telescope image, with no
+            AstroIdentify runs on your own computer, from this website or the command line.
+            Give it a telescope image, with no
             coordinates or target name, and it works out where in the sky the image points,
             which catalogued objects are in the frame, and how well the image supports each
             identification.
@@ -131,8 +135,8 @@
           <div class="run">
             <h3 class="run__title">Run it</h3>
             <pre class="run__code"><code><span class="run__prompt">$</span> pip install -e .
-<span class="run__prompt">$</span> cp astroidentify.example.toml my-image.toml
-<span class="run__prompt">$</span> astroidentify run my-image.toml</code></pre>
+<span class="run__prompt">$</span> astroidentify serve          <span class="run__prompt"># this website, with uploads</span>
+<span class="run__prompt">$</span> astroidentify run my-image.toml   <span class="run__prompt"># or the command line</span></code></pre>
             <p class="run__note">
               Needs Python 3.11+, a local Astrometry.net installation with index files, and
               network access (or a local cache) for the Gaia and SIMBAD queries. The project

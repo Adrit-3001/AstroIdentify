@@ -160,11 +160,17 @@ main { position: relative; z-index: 2; }
 }
 [data-layout='narrow'] .hero__tagline { margin-inline: auto; }
 
+.hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 2rem;
+}
+[data-layout='narrow'] .hero__actions { justify-content: center; }
 .hero__action {
   display: inline-flex;
   align-items: center;
   gap: 0.55em;
-  margin-top: 2rem;
   padding: 0.8em 1.35em 0.8em 1.5em;
   border: 1px solid rgba(200, 212, 255, 0.34);
   border-radius: 999px;
@@ -184,6 +190,16 @@ main { position: relative; z-index: 2; }
 .hero__action:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
+}
+.hero__action--primary {
+  border-color: transparent;
+  background: #e9edfb;
+  color: #070a16;
+  font-weight: 600;
+}
+.hero__action--primary:hover {
+  background: #ffffff;
+  border-color: transparent;
 }
 
 /* While the opening plays, text waits for the timeline (inline styles take over from here). */

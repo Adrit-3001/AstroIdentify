@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Analyze an image · AstroIdentify</title>
+    <meta
+      name="description"
+      content="Upload a telescope image: AstroIdentify works out where it points and annotates the catalogued objects in it."
+    />
+    <meta name="theme-color" content="#020308" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23050814'/%3E%3Ccircle cx='16' cy='16' r='3.2' fill='%23eef2ff'/%3E%3Cpath d='M16 5v6M16 21v6M5 16h6M21 16h6' stroke='%23aab8ff' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="analyze.css" />
+    <script type="module" src="src/analyze/main.js"></script>
+  </head>
+  <body class="ws">
+    <header class="ws-header">
+      <a class="ws-brand" href="index.html">AstroIdentify</a>
+      <nav class="ws-nav" aria-label="Site">
+        <a href="index.html#how-it-works">How it works</a>
+      </nav>
+    </header>
+
+    <main class="ws-main">
+      <!-- 1. Upload ----------------------------------------------------------------------- -->
+      <section class="ws-view ws-view--upload" id="view-upload" aria-labelledby="upload-title">
+        <h1 class="ws-title" id="upload-title">Analyze an image</h1>
+        <p class="ws-lede">
+          AstroIdentify works out where your telescope image points, names the catalogued
+          objects in it, and gives you an annotated copy to download.
+        </p>
+
+        <div class="dropzone" id="dropzone">
+          <input
+            type="file"
+            id="file-input"
+            class="visually-hidden"
+            accept=".jpg,.jpeg,.png,.fits,.fit,.fts,.gz"
+            tabindex="-1"
+          />
+          <div class="dropzone__empty" id="drop-empty">
+            <svg class="dropzone__icon" aria-hidden="true" viewBox="0 0 48 48" width="48" height="48">
+              <rect x="6" y="9" width="36" height="30" rx="5" fill="none" stroke="currentColor"
+                stroke-width="2" />
+              <circle cx="31" cy="19" r="3" fill="currentColor" />
+              <path d="M10 34l9-9 6 6 4-4 9 9" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linejoin="round" />
+            </svg>
+            <p class="dropzone__title">Drop a telescope image here</p>
+            <p class="dropzone__or">
+              or <button type="button" class="btn btn--primary" id="choose-file">Choose a file</button>
+            </p>
+            <p class="dropzone__formats" id="formats">JPEG, PNG or FITS</p>
+          </div>
+
+          <div class="selected" id="drop-selected" hidden>
+            <div class="selected__preview">
+              <img id="file-preview" alt="" />
+              <p class="selected__placeholder" id="file-placeholder" hidden>
+                <span>FITS</span>
+                A preview appears after analysis.
+              </p>
+            </div>
+            <div class="selected__meta">
+              <p class="selected__label">Selected image</p>
+              <p class="selected__name" id="file-name"></p>
+              <p class="selected__size" id="file-size"></p>
+              <div class="selected__actions">
+                <button type="button" class="btn btn--primary" id="analyze">Analyze image</button>
+                <button type="button" class="btn" id="replace">Replace file</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="form-error" id="upload-error" role="alert" hidden></p>
+        <p class="ws-note" id="upload-note">
+          Analysis runs on this computer with Astrometry.net, then looks stars and objects up in
+          Gaia DR3 and SIMBAD. Plate solving can take a few minutes.
+        </p>
+      </section>
+
+      <!-- 2. Analyzing -------------------------------------------------------------------- -->
+      <section class="ws-view ws-view--progress" id="view-progress" hidden aria-labelledby="progress-title">
+        <div class="progress">
+          <figure class="progress__image" id="progress-figure">
+            <img id="progress-image" alt="" />
+            <p class="selected__placeholder" id="progress-placeholder" hidden>
+              <span>FITS</span>
+            </p>
+            <div class="progress__scan" aria-hidden="true"></div>
+          </figure>
+          <div class="progress__panel">
+            <h1 class="ws-title ws-title--small" id="progress-title">Analyzing your image…</h1>
+            <p class="progress__meta">
+              <span id="progress-file"></span>
+              <span id="progress-elapsed"></span>
+            </p>
+            <ol class="stages" id="stages" aria-live="polite"></ol>
+            <p class="ws-note">
+              Working out where an image points can take a few minutes. You can keep this page
+              open, or come back to this address later.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. Result ----------------------------------------------------------------------- -->
+      <section class="ws-view ws-view--result" id="view-result" hidden aria-labelledby="result-title">
+        <div class="toolbar">
+          <h1 class="visually-hidden" id="result-title">Result</h1>
+          <div class="segmented" role="group" aria-label="Show">
+            <button type="button" data-view="original" aria-pressed="false">Original</button>
+            <button type="button" data-view="annotated" aria-pressed="true">Annotated</button>
+          </div>
+          <div class="toolbar__actions">
+            <a class="btn btn--primary" id="download" href="#" download>
+              <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16">
+                <path d="M8 2.5v8M4.5 7.5 8 11l3.5-3.5M3 13.5h10" fill="none" stroke="currentColor"
+                  stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              Download annotated image
+            </a>
+            <button type="button" class="btn" data-action="another">Analyze another image</button>
+          </div>
+        </div>
+        <div class="result">
+          <div class="viewer" id="viewer">
+            <div class="viewer__frame" id="viewer-frame">
+              <img id="viewer-image" alt="" />
+              <svg class="viewer__markers" id="viewer-markers" aria-hidden="true"></svg>
+              <div class="viewer__labels" id="viewer-labels" aria-hidden="true"></div>
+            </div>
+          </div>
+          <aside class="panel" id="result-panel" aria-label="Analysis details"></aside>
+        </div>
+      </section>
+
+      <!-- Failed -------------------------------------------------------------------------- -->
+      <section class="ws-view ws-view--failed" id="view-failed" hidden aria-labelledby="failed-title">
+        <div class="failed">
+          <h1 class="ws-title ws-title--small" id="failed-title">This image couldn’t be analyzed</h1>
+          <p class="ws-lede" id="failed-message"></p>
+          <button type="button" class="btn btn--primary" data-action="another">Analyze another image</button>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

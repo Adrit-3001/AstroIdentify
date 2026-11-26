@@ -485,6 +485,62 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="print the commands without running them"
     )
     _add_verbose(run_parser)
+
+    from astroidentify.web.settings import WebSettings
+
+    web = WebSettings()
+    serve_parser = commands.add_parser(
+        "serve",
+        help="run the web interface: upload an image, analyze it, download the annotated copy",
+        description="Serve the AstroIdentify website and its analysis API. Each upload becomes a "
+        "job that runs the normal pipeline (detect, solve, catalog-match, identify, assess) in "
+        "its own directory under --data-dir.",
+    )
+    serve_parser.add_argument("--host", default="127.0.0.1", help="address to listen on")
+    serve_parser.add_argument("--port", type=int, default=8765, help="port (default 8765)")
+    serve_parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=web.data_dir,
+        help=f"where job directories go (default {web.data_dir})",
+    )
+    serve_parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=web.catalog_cache_dir,
+        help=f"Gaia/SIMBAD response cache (default {web.catalog_cache_dir})",
+    )
+    serve_parser.add_argument(
+        "--max-upload-mb",
+        type=float,
+        default=web.max_upload_bytes / 1024 / 1024,
+        help="largest upload, MiB (default %(default)g)",
+    )
+    serve_parser.add_argument(
+        "--retention-hours",
+        type=float,
+        default=web.retention_hours,
+        help="delete finished jobs after this many hours (default %(default)g)",
+    )
+    serve_parser.add_argument(
+        "--solve-timeout",
+        type=float,
+        default=web.solve_attempt_timeout_seconds,
+        help="plate-solver limit per attempt, seconds (default %(default)g)",
+    )
+    serve_parser.add_argument(
+        "--solve-total-timeout",
+        type=float,
+        default=web.solve_total_timeout_seconds,
+        help="plate-solver limit for all attempts, seconds (default %(default)g)",
+    )
+    serve_parser.add_argument(
+        "--job-timeout",
+        type=float,
+        default=web.job_timeout_seconds,
+        help="stop an analysis after this many seconds (default %(default)g)",
+    )
+    _add_verbose(serve_parser)
     return parser
 
 
@@ -524,6 +580,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_inspect(args)
     if args.command == "run":
         return _run_file(args)
+    if args.command == "serve":
+        return _run_serve(args)
     return _run_preprocess(args)
 
 
@@ -834,6 +892,26 @@ def _run_file(args: argparse.Namespace) -> int:
     except ConfigurationError as exc:
         _error(exc)
         return EXIT_USAGE
+
+
+def _run_serve(args: argparse.Namespace) -> int:
+    from astroidentify.web.server import serve
+    from astroidentify.web.settings import WebSettings
+
+    if args.max_upload_mb <= 0 or args.retention_hours <= 0 or args.job_timeout <= 0:
+        _error(ConfigurationError("--max-upload-mb, --retention-hours, --job-timeout must be > 0"))
+        return EXIT_USAGE
+    settings = WebSettings(
+        data_dir=args.data_dir,
+        catalog_cache_dir=args.cache_dir,
+        max_upload_bytes=int(args.max_upload_mb * 1024 * 1024),
+        retention_hours=args.retention_hours,
+        job_timeout_seconds=args.job_timeout,
+        solve_attempt_timeout_seconds=args.solve_timeout,
+        solve_total_timeout_seconds=args.solve_total_timeout,
+    )
+    serve(settings, host=args.host, port=args.port)
+    return EXIT_OK
 
 
 def _run_inspect(args: argparse.Namespace) -> int:

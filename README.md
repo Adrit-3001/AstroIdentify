@@ -25,6 +25,35 @@ galaxies, clusters, ...) that the WCS places in the image. It reports catalogue 
 image measurements, and grades each identification with a transparent, rule-based support
 level (not a probability).
 
+## Website: upload, analyze, download
+
+```bash
+source .venv/bin/activate
+pip install -e .          # once
+astroidentify serve       # then open http://127.0.0.1:8765/  (or: python web/serve.py)
+```
+
+"Analyze an image" opens the upload workspace (`web/analyze.html`). Each upload becomes a job
+that runs the same steps as `astroidentify run` (detect → solve → catalog-match → identify →
+assess) in a separate worker process, one job at a time. The browser gets a job id at once
+and polls its progress. Results show the image with markers (detected points, Gaia-matched
+stars, catalogued objects); the full-resolution annotated PNG is drawn on the server from
+the same marker list as the preview.
+
+- **Accepted files:** JPEG, PNG, FITS (`.fits/.fit/.fts`, optionally `.gz`), up to 64 MB
+  (`--max-upload-mb`). Name, size and file signature are checked before analysis.
+- **Jobs:** `outputs/web-jobs/<id>/` (`--data-dir`): `upload/`, `steps/` (normal pipeline
+  outputs), `result/` (`result.json`, `original.png`, `annotated.png`), `worker.log`.
+- **Retention:** a job is deleted 24 hours after it finishes (`--retention-hours`), checked
+  at start-up and hourly. Jobs interrupted by a server restart are marked failed.
+- **Limits:** solver 300 s per attempt / 900 s total (`--solve-timeout`,
+  `--solve-total-timeout`); a whole job is stopped after 30 min (`--job-timeout`).
+- **Names:** an object is named on the image only when the identification step placed it
+  there and the evidence step found image support (strong/moderate/weak); all identified
+  objects are marked and listed. Stars are named only when Gaia-matched and named in SIMBAD.
+- Blind solves can be wrong. A sky position not confirmed by Gaia DR3 is labelled
+  unconfirmed in the results.
+
 ## Quick start: process an image with one run file
 
 Instead of running `detect`, `solve`, `catalog-match`, `identify`, `assess` and
