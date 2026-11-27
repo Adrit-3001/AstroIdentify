@@ -11,9 +11,10 @@ Identified objects (evidence level, catalogued magnitude):
 * LEDA 1 - galaxy, catalogue-only (in the image per the catalogue; not seen)
 
 "UGC 5" is an alias of both NGC 2 and NGC 3. Other catalogue rows: Vega (a star in the field
-that no detection was matched to), an HI source (a type that isn't marked) and NGC 99
-(outside the image). Gaia 444 is in the image and bright enough but unmatched; 555 is too
-faint to have been matched.
+that no detection was matched to, at SIMBAD position (5, 5)), an HI source at (20, 20) (a type
+that isn't marked) and NGC 99 (outside the image). Gaia 444 at (8, 44) is in the image and
+bright enough but unmatched; 555 is too faint to have been matched. Positional accuracy: Gaia
+median residual 0.5 px over the field; LEDA 1 has a local r50 of 1.0 px from 12 stars.
 """
 
 from __future__ import annotations
@@ -98,17 +99,20 @@ def outputs(tmp_path: Path) -> dict[str, Path]:
         writer.writerows([[1, 111, 9.5], [2, 222, 7.0], [5, 333, 11.0]])
     with (dirs["catalog-match"] / "gaia_sources.csv").open("w", newline="") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["source_id", "phot_g_mean_mag", "in_image", "eligible"])
+        writer.writerow(["source_id", "phot_g_mean_mag", "x_px", "y_px", "in_image", "eligible"])
         writer.writerows(
             [
-                [111, 9.5, "true", "true"],
-                [222, 7.0, "true", "true"],
-                [333, 11.0, "true", "true"],
-                [444, 10.0, "true", "true"],
-                [555, 19.0, "true", "false"],
+                [111, 9.5, 10.0, 12.0, "true", "true"],
+                [222, 7.0, 30.0, 20.0, "true", "true"],
+                [333, 11.0, 40.0, 8.0, "true", "true"],
+                [444, 10.0, 8.0, 44.0, "true", "true"],
+                [555, 19.0, 60.0, 2.0, "true", "false"],
             ]
         )
-    write_json(dirs["catalog-match"] / "catalog_match_summary.json", {"summary": {"matches": 3}})
+    write_json(
+        dirs["catalog-match"] / "catalog_match_summary.json",
+        {"summary": {"matches": 3, "median_residual_px": 0.5}},
+    )
     objects = [
         _object(
             7, "M 57", "planetary_nebula", 32.0, 24.0,
@@ -141,7 +145,16 @@ def outputs(tmp_path: Path) -> dict[str, Path]:
         {
             "objects": [
                 {"catalogue_id": 7, "support_level": "strong", "explanation": "clear"},
-                {"catalogue_id": 8, "support_level": "catalogue-only", "explanation": "faint"},
+                {
+                    "catalogue_id": 8,
+                    "support_level": "catalogue-only",
+                    "explanation": "faint",
+                    "astrometry": {
+                        "r50_px": 1.0,
+                        "r50_source": "local_gaia",
+                        "n_local_matches": 12,
+                    },
+                },
                 {"catalogue_id": 10, "support_level": "weak", "explanation": "some"},
                 {"catalogue_id": 11, "support_level": "moderate", "explanation": "ok"},
             ]

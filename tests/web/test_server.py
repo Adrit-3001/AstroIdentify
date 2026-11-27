@@ -211,3 +211,14 @@ def test_jobs_from_before_display_options_say_so(server, tmp_path):
     status, _, body = _request(f"{server}/api/jobs/{job_id}/view?brightest=2")
     assert status == 404 and "earlier version" in json.loads(body)["error"]
     assert _request(f"{server}/api/jobs/{job_id}/annotated.png")[0] == 200  # default still works
+
+
+def test_view_can_include_undetected_objects(server, tmp_path):
+    job_id = _finished_job(tmp_path)
+    status, _, body = _request(f"{server}/api/jobs/{job_id}/view?undetected=1&label=Vega")
+    view = json.loads(body)
+    assert status == 200 and view["view"]["options"]["undetected"]
+    estimated = sorted(m["name"] for m in view["markers"] if m.get("estimated"))
+    assert estimated == ["LEDA 1", "Vega"]
+    status, headers, _ = _request(f"{server}/api/jobs/{job_id}/annotated.png?undetected=1")
+    assert status == 200 and headers["Content-Type"] == "image/png"

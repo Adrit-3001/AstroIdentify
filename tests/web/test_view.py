@@ -57,7 +57,9 @@ def test_analysis_names_matched_stars_by_gaia_id_and_keeps_every_candidate(analy
     assert objects["M 57"]["eligible"] and not objects["LEDA 1"]["eligible"]
     # Rows kept only to explain requests: not drawn objects nor matched stars' rows.
     assert {r["display_name"] for r in analysis["lookup"]} == {"* alf Lyr", "GAVC 1", "NGC 99"}
-    assert analysis["gaia_in_image"] == ["444"]  # eligible and unmatched only
+    assert analysis["gaia_in_image"] == {"444": [8.0, 44.0, 10.0]}  # eligible, unmatched
+    vega = next(r for r in analysis["lookup"] if r["display_name"] == "* alf Lyr")
+    assert (vega["x"], vega["y"], vega["in_image"]) == (5.0, 5.0, True)
 
 
 def test_default_view_names_supported_objects_and_named_stars(analysis):
@@ -222,3 +224,85 @@ def np_equal(image, pixels) -> bool:
     import numpy as np
 
     return bool(np.array_equal(np.asarray(image), pixels))
+
+
+# --------------------------------------------------------------------------- undetected
+
+
+def test_undetected_objects_are_named_only_when_asked_and_marked_as_estimates(analysis):
+    assert "LEDA 1" not in labelled(view(analysis))
+    result = make_view(analysis, ViewOptions(undetected=True))
+    leda = next(m for m in result["markers"] if m.get("name") == "LEDA 1")
+    assert leda["label"] and leda["estimated"] and leda["not_seen"] == "not_visible"
+    assert leda["estimate_note"] == "not visible · estimated position"
+    assert (leda["x"], leda["y"]) == (12.0, 36.0)  # the catalogue position, unchanged
+    assert leda["accuracy"]["source"] == "local" and leda["accuracy"]["n_stars"] == 12
+    assert leda["accuracy"]["r95_px"] == pytest.approx(2.08, abs=0.01)
+    assert "12 matched Gaia stars near it" in leda["accuracy_text"]
+    supported = [m for m in result["markers"] if m.get("label") and m["kind"] == "object"]
+    assert not any(m.get("estimated") for m in supported if m["name"] != "LEDA 1")
+    assert result["counts"]["objects_estimated"] == 1
+    assert any(item["kind"] == "estimate" for item in result["legend"])
+
+
+def test_undetected_objects_take_part_in_brightest_and_types(analysis):
+    options = ViewOptions.from_values(["galaxy"], 1, (), undetected=True)
+    assert labelled(make_view(analysis, options)) == ["NGC 2"]  # LEDA 1 has no magnitude
+    options = ViewOptions.from_values(["galaxy"], 3, (), undetected=True)
+    assert set(labelled(make_view(analysis, options))) == {"NGC 2", "NGC 3", "LEDA 1"}
+
+
+@pytest.mark.parametrize(
+    ("query", "xy", "why", "kind_text"),
+    [
+        ("Vega", (5.0, 5.0), "not_detected", "Star"),
+        ("Gaia DR3 444", (8.0, 44.0), "not_detected", "Star"),
+        ("GAVC 1", (20.0, 20.0), "not_assessed", "HI (21cm) Source"),
+    ],
+)
+def test_requested_undetected_rows_are_placed_at_their_estimated_position(
+    analysis, query, xy, why, kind_text
+):
+    off = answers(view(analysis, labels=[query]))[query]
+    assert off["status"] != "estimated" and "estimated position" in off["message"]
+    options = ViewOptions.from_values(types=[], labels=[query], undetected=True)
+    result = make_view(analysis, options)
+    answer = answers(result)[query]
+    assert answer["status"] == "estimated"
+    assert "Named at its estimated position" in answer["message"]
+    marker = next(m for m in result["markers"] if m.get("estimated"))
+    assert (marker["x"], marker["y"]) == xy and marker["not_seen"] == why
+    assert marker["type"] == kind_text and marker["label"]
+    assert marker["accuracy"]["source"] == "field"
+    assert marker["accuracy"]["r95_px"] == pytest.approx(1.04, abs=0.01)
+
+
+def test_estimates_never_place_what_is_outside_or_unknown(analysis):
+    options = ViewOptions.from_values(types=[], labels=["NGC 99", "Andromeda"], undetected=True)
+    result = make_view(analysis, options)
+    assert {a["status"] for a in result["view"]["requests"]} == {"outside", "not_found"}
+    assert not any(m.get("estimated") for m in result["markers"])
+
+
+def test_undetected_option_parsing():
+    assert ViewOptions.from_query({"undetected": ["1"]}).undetected
+    assert not ViewOptions.from_query({"undetected": ["0"]}).undetected
+    assert not ViewOptions.from_query({"undetected": ["1"]}).is_default
+    with pytest.raises(ViewOptionsError, match="undetected"):
+        ViewOptions.from_query({"undetected": ["maybe"]})
+
+
+def test_png_draws_estimates_dashed_inside_the_image(analysis, tmp_path):
+    pixels = load_image(png(tmp_path)).data.astype("uint8")
+    options = ViewOptions.from_values(types=[], labels=["Gaia DR3 444"], undetected=True)
+    drawn = render_annotated(pixels, make_view(analysis, options))
+    assert drawn.size == (W, H) and not np_equal(drawn, pixels)
+    assert drawn.getpixel((8, 44)) != (10, 10, 10)  # the centre dot
+
+
+def test_placed_rows_are_labelled_by_the_name_asked_for(analysis):
+    options = ViewOptions.from_values(types=[], labels=["vega", "alf Lyr"], undetected=True)
+    result = make_view(analysis, options)
+    assert labelled(result) == ["Vega"]  # catalogue spelling; the same star once
+    options = ViewOptions.from_values(types=[], labels=["alf Lyr"], undetected=True)
+    assert labelled(make_view(analysis, options)) == ["alf Lyr"]

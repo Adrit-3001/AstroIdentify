@@ -17,6 +17,10 @@ What gets a marker, and what may be named:
   (galaxy, nebula, cluster, ...), with its evidence level when the assessment ran. Named only
   when the assessment found image support (strong, moderate or weak).
 
+Objects the image doesn't show (or can't confirm) can still be placed when asked for: the
+analysis keeps their catalogue position projected through the plate solution, with an accuracy
+radius from how well that solution fits the matched Gaia stars (``position_accuracy``).
+
 A star's SIMBAD row is the one listing its Gaia DR3 source ID; failing that, a named row
 within 3″ of it (the inspection module's naming rule, with proper motion back to J2000).
 
@@ -28,6 +32,7 @@ first, are flipped to the usual display orientation together with their markers.
 from __future__ import annotations
 
 import csv
+import itertools
 import json
 import math
 from dataclasses import dataclass
@@ -57,6 +62,15 @@ from astroidentify.web.view import (
 ANALYSIS_VERSION = 2
 #: A named SIMBAD star row this close to a Gaia star (at J2000) names it.
 NAME_MATCH_ARCSEC = 3.0
+#: 95% radius / median radius of a circular Gaussian position error (Rayleigh distribution):
+#: sqrt(ln 20 / ln 2).
+R95_PER_R50 = math.sqrt(math.log(20) / math.log(2))
+#: Why an object's position is only an estimate (it isn't seen in the image).
+NOT_SEEN = {
+    "catalogue-only": "not_visible",
+    "insufficient": "unconfirmed",
+    None: "not_assessed",
+}
 
 SOLVE_FAILURES = {
     "timeout": "Plate solving ran out of time before it found where the image points.",
@@ -190,8 +204,10 @@ def build_analysis(
     table: list[dict[str, Any]] = []
     objects: list[dict[str, Any]] = []
     star_rows: dict[int, dict[str, Any]] = {}
-    gaia_in_image: list[str] = []
+    gaia_in_image: dict[str, list[float]] = {}
     assessed = False
+    pixel_scale = None
+    field_accuracy = _field_accuracy(step_dirs, ok("catalog-match"))
     if ok("identify"):
         table = (_read_json(step_dirs["identify"] / "catalog_objects.json") or {}).get(
             "objects", []
@@ -203,14 +219,16 @@ def build_analysis(
             doc = _read_json(step_dirs["assess"] / "object_evidence.json") or {}
             evidence = {e["catalogue_id"]: e for e in doc.get("objects", [])}
             assessed = True
-        objects = _objects(table, evidence, width, height, fy)
+        if field_accuracy is not None and pixel_scale:
+            field_accuracy["r95_arcsec"] = round(field_accuracy["r95_px"] * pixel_scale, 2)
+        objects = _objects(table, evidence, width, height, fy, pixel_scale, field_accuracy)
         if matches:
             matched_ids = {int(m["gaia_source_id"]) for m in matches.values()}
             star_rows = _star_rows(
                 table, summary, width, height, matched_ids, pixel_scale, step_dirs
             )
     if ok("catalog-match"):
-        gaia_in_image = _gaia_in_image(step_dirs["catalog-match"], matches)
+        gaia_in_image = _gaia_in_image(step_dirs["catalog-match"], matches, fy)
 
     matched_rows = [s for s in detections if s["source_id"] in matches]
     matched_rows.sort(key=lambda s: _mag_key(_g_mag(matches[s["source_id"]])))
@@ -246,7 +264,7 @@ def build_analysis(
     matched_gaia = {int(s["gaia_id"]) for s in stars}
     used = {id(r) for r in star_rows.values()}
     lookup = [
-        _lookup_row(r)
+        _lookup_row(r, fy, width, height, gaia_in_image)
         for r in table
         if r["catalogue_id"] not in drawn
         and id(r) not in used
@@ -282,6 +300,7 @@ def build_analysis(
         "pool": {"stars": stars, "detections": unmatched, "objects": objects},
         "lookup": lookup,
         "gaia_in_image": gaia_in_image,
+        "field_accuracy": field_accuracy,
     }
     return analysis, pixels
 
@@ -312,7 +331,47 @@ def _magnitude(row: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _objects(table, evidence, width, height, fy) -> list[dict[str, Any]]:
+def _field_accuracy(step_dirs: dict[str, Path], gaia_ok: bool) -> dict[str, Any] | None:
+    """Position accuracy over the whole field: the Gaia median residual of the WCS."""
+    if not gaia_ok:
+        return None
+    summary = (_read_json(step_dirs["catalog-match"] / "catalog_match_summary.json") or {}).get(
+        "summary", {}
+    )
+    r50 = summary.get("median_residual_px")
+    if not isinstance(r50, int | float) or not math.isfinite(r50):
+        return None
+    return {
+        "r95_px": round(r50 * R95_PER_R50, 2),
+        "r95_arcsec": None,
+        "source": "field",
+        "n_stars": summary.get("matches"),
+    }
+
+
+def position_accuracy(evidence: dict[str, Any], field: dict[str, Any] | None, pixel_scale):
+    """95% accuracy radius of a projected catalogue position: from the evidence step's local
+    Gaia residuals near the object when it has them, else the field's. This is the accuracy of
+    the image-to-sky mapping only; the catalogue position's own error is not included."""
+    astrometry = evidence.get("astrometry") or {}
+    r50 = astrometry.get("r50_px")
+    if isinstance(r50, int | float) and math.isfinite(r50):
+        r95 = r50 * R95_PER_R50
+        local = astrometry.get("r50_source") == "local_gaia"
+        return {
+            "r95_px": round(r95, 2),
+            "r95_arcsec": round(r95 * pixel_scale, 2) if pixel_scale else None,
+            "source": "local" if local else "field",
+            "n_stars": astrometry.get("n_local_matches")
+            if local
+            else astrometry.get("gaia_matches"),
+        }
+    return dict(field) if field else None
+
+
+def _objects(
+    table, evidence, width, height, fy, pixel_scale=None, field_accuracy=None
+) -> list[dict[str, Any]]:
     """Markers for the identified (retained) objects that can be drawn, best supported first."""
     rows = [r for r in table if r.get("retained")]
 
@@ -351,8 +410,11 @@ def _objects(table, evidence, width, height, fy) -> list[dict[str, Any]]:
                 "support": support,
                 "explanation": ev.get("explanation"),
                 "magnitude": _magnitude(r),
-                # Named only when the image shows it (the evidence step's levels).
+                # Named only when the image shows it (the evidence step's levels), unless an
+                # estimated position is asked for: then ``not_seen`` says why it's estimated.
                 "eligible": support in LABELLED_SUPPORT,
+                "not_seen": None if support in LABELLED_SUPPORT else NOT_SEEN.get(support),
+                "accuracy": position_accuracy(ev, field_accuracy, pixel_scale),
                 "main_id": r.get("main_id"),
                 "aliases": list(r.get("aliases") or ()),
                 "common_names": list(r.get("common_names") or ()),
@@ -413,29 +475,58 @@ def _star_rows(table, summary, width, height, matched_ids, pixel_scale, step_dir
     return rows
 
 
-def _gaia_in_image(catalog_dir: Path, matches: dict[int, dict[str, str]]) -> list[str]:
-    """Gaia source IDs inside the image, bright enough for the catalogue step to try to match
-    them (``eligible``), that no detection was matched to."""
+def _gaia_in_image(catalog_dir: Path, matches: dict[int, dict[str, str]], fy) -> dict:
+    """Gaia stars inside the image, bright enough for the catalogue step to try to match them
+    (``eligible``), that no detection was matched to: ``{source_id: [x, y, G]}`` with the
+    catalogue step's projected (epoch-propagated) positions in display orientation."""
     path = catalog_dir / "gaia_sources.csv"
     matched = {m["gaia_source_id"] for m in matches.values()}
+    found = {}
     try:
         with path.open(encoding="utf-8") as fh:
-            return [
-                r["source_id"]
-                for r in csv.DictReader(fh)
-                if r.get("in_image") == "true"
-                and r.get("eligible") == "true"
-                and r["source_id"] not in matched
-            ]
-    except (OSError, KeyError):
-        return []
+            for r in csv.DictReader(fh):
+                if r.get("in_image") != "true" or r.get("eligible") != "true":
+                    continue
+                if r["source_id"] in matched:
+                    continue
+                try:
+                    x, y = float(r["x_px"]), float(r["y_px"])
+                except (KeyError, TypeError, ValueError):
+                    x = y = math.nan
+                g = _g_mag(r)
+                found[r["source_id"]] = [
+                    _round(x, 2), _round(fy(y), 2) if math.isfinite(y) else None, _round(g, 2)
+                ]  # fmt: skip
+    except OSError:
+        return {}
+    return found
 
 
-def _lookup_row(r: dict[str, Any]) -> dict[str, Any]:
-    """A catalogue row kept only to explain why a requested name isn't labelled."""
+def _lookup_row(r: dict[str, Any], fy, width, height, gaia_in_image) -> dict[str, Any]:
+    """A catalogue row that isn't drawn: kept to explain why a requested name isn't named,
+    and with its projected position, to place it as an estimate when that is asked for. Stars
+    use their Gaia position (propagated to the image epoch) when Gaia lists them."""
     star = r.get("category") == "star"
     aliases = _star_aliases(r) if star else list(r.get("aliases") or ())
+    x, y = r.get("projected_x"), r.get("projected_y")
+    x = float(x) if isinstance(x, int | float) and math.isfinite(x) else None
+    y = float(y) if isinstance(y, int | float) and math.isfinite(y) else None
+    position_source = "simbad"
+    for gaia_id in _gaia_ids(r):
+        gx, gy, _ = gaia_in_image.get(str(gaia_id)) or (None, None, None)
+        if gx is not None and gy is not None:
+            x, y, position_source = gx, gy, "gaia"
+            break
+    else:
+        y = fy(y) if y is not None else None
+    inside = x is not None and y is not None and -0.5 <= x <= width - 0.5
+    inside = inside and -0.5 <= y <= height - 0.5
     return {
+        "x": round(x, 2) if x is not None else None,
+        "y": round(y, 2) if y is not None else None,
+        "in_image": inside,
+        "position_source": position_source,
+        "magnitude": _magnitude(r),
         "display_name": r.get("display_name") or r.get("main_id"),
         "main_id": r.get("main_id"),
         "aliases": aliases,
@@ -611,8 +702,16 @@ def label_text(marker: dict[str, Any]) -> tuple[str, str | None]:
         name = marker["name"]
         if marker.get("common_name"):
             name += f" ({marker['common_name']})"
-        return name, marker.get("type") or None
+        second = " · ".join(t for t in (marker.get("type"), marker.get("estimate_note")) if t)
+        return name, second or None
     return marker.get("name") or "", None
+
+
+def estimate_radius(marker: dict[str, Any], minimum: float) -> float:
+    """Radius of an estimated position's dashed circle: its 95% accuracy, at least
+    ``minimum`` (so it stays visible); identical in the preview."""
+    r95 = (marker.get("accuracy") or {}).get("r95_px") or 0.0
+    return max(float(r95), minimum)
 
 
 def marker_box(marker: dict[str, Any], style: dict[str, float], width: int, height: int):
@@ -627,6 +726,8 @@ def marker_box(marker: dict[str, Any], style: dict[str, float], width: int, heig
             xs, ys = [p[0] for p in pts], [p[1] for p in pts]
             return min(xs), min(ys), max(xs), max(ys)
         r = style["object_outer"]
+        if marker.get("estimated"):
+            r = estimate_radius(marker, style["object_outer"])
     else:
         r = style["star_radius"]
     return marker["x"] - r, marker["y"] - r, marker["x"] + r, marker["y"] + r
@@ -696,6 +797,26 @@ def render_annotated(pixels: np.ndarray, result: dict[str, Any]) -> Image.Image:
         if m["kind"] != "object":
             continue
         color = _rgb(m["color"])
+        if m.get("estimated"):
+            # Not seen in the image: dashed, so it never looks like a detection.
+            dash = 3 * stroke + 4
+            if m.get("footprint"):
+                pts = [tuple(p) for p in m["footprint"]]
+                _dashed(draw, [*pts, pts[0]], (*color, 235), stroke, dash)
+            if m.get("centre_in_image"):
+                x, y = m["x"], m["y"]
+                r = estimate_radius(m, style["object_outer"])
+                steps = max(24, int(2 * math.pi * r / dash) // 2 * 2)
+                circle = [
+                    (x + r * math.cos(2 * math.pi * k / steps),
+                     y + r * math.sin(2 * math.pi * k / steps))
+                    for k in range(steps + 1)
+                ]  # fmt: skip
+                for k in range(0, steps, 2):
+                    draw.line(circle[k : k + 2], fill=(*color, 235), width=stroke)
+                d = max(1.5, stroke)
+                draw.ellipse((x - d, y - d, x + d, y + d), fill=(*color, 255))
+            continue
         if m.get("footprint"):
             pts = [tuple(p) for p in m["footprint"]]
             draw.line([*pts, pts[0]], fill=(*color, 255), width=stroke, joint="curve")
@@ -751,6 +872,27 @@ def render_annotated(pixels: np.ndarray, result: dict[str, Any]) -> Image.Image:
                 stroke_fill=(0, 0, 0),
             )
     return image.convert("RGB")
+
+
+def _dashed(draw, points, fill, width: int, dash: float) -> None:
+    """A dashed polyline: ``dash`` pixels on, ``dash`` off, along ``points``."""
+    on, left = True, dash
+    for (x0, y0), (x1, y1) in itertools.pairwise(points):
+        length = math.hypot(x1 - x0, y1 - y0)
+        t = 0.0
+        while t < length:
+            step = min(left, length - t)
+            if on:
+                a, b = t / length, (t + step) / length
+                draw.line(
+                    [(x0 + (x1 - x0) * a, y0 + (y1 - y0) * a),
+                     (x0 + (x1 - x0) * b, y0 + (y1 - y0) * b)],
+                    fill=fill, width=width,
+                )  # fmt: skip
+            t += step
+            left -= step
+            if left <= 0:
+                on, left = not on, dash
 
 
 def _rgb(hex_color: str) -> tuple[int, int, int]:
@@ -859,7 +1001,9 @@ def annotate_image(
         document = {
             "statement": "Display only: the options choose among saved pipeline results; nothing "
             "is re-measured. Objects are named only with image evidence (strong, moderate or "
-            "weak), stars only when matched to a detection in Gaia DR3.",
+            "weak), stars only when matched to a detection in Gaia DR3; with undetected objects "
+            "included, the others are drawn dashed at their estimated positions (catalogue "
+            "position through the plate solution) and marked as not seen.",
             "inputs": {k: str(v) for k, v in step_dirs.items()},
             "steps_available": {k: o.ok for k, o in outcomes.items()},
             **view,

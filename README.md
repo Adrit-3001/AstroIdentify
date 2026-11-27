@@ -72,8 +72,21 @@ Beside the result, **Choose what's shown** changes the preview and the downloade
   is shown even when its type is unticked. Each name gets an answer: named, ambiguous, outside
   the image, not a kind that is marked, or not detected.
 
-What may be named never changes. An object is named only when the evidence step found image
-support for it (strong, moderate or weak). A star is named only when a detection was matched
+- **Also name objects the image doesn't show (estimated position):** this is off by default.
+  When on, catalogued objects the image doesn't show or can't confirm are named too. So are
+  requested stars or rows that weren't detected, such as a saturated Albireo or a radio source.
+  They are drawn **dashed** at their estimated position: the catalogue position projected
+  through the plate solution, which was fitted to the matched Gaia stars. Stars use their Gaia
+  position, adjusted to the image's epoch. The label says why the position is only an estimate:
+  `not visible`, `unconfirmed`, `not assessed` or `not detected`. The dashed circle is the 95%
+  accuracy radius, 2.08 × the median Gaia residual, taken from stars near the object when the
+  evidence step measured them and otherwise from the whole field. It is drawn at least
+  marker-sized. It covers how well the image maps to the sky, not errors in the catalogue's
+  own position. An estimate is never treated as a detection. Objects outside the image are
+  never placed. CLI: `--include-undetected`; API: `undetected=1`.
+
+Without that option, what may be named never changes. An object is named only when the
+evidence step found image support for it (strong, moderate or weak). A star is named only when a detection was matched
 to it in Gaia DR3. A request for anything else is answered with the reason and not named.
 For example, a very bright star that is saturated and split into several detections is never
 matched to Gaia, so it can't be named. The options only choose among the saved results:

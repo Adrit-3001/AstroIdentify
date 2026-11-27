@@ -13,7 +13,8 @@ API (JSON unless noted):
 
 Display options (query parameters of ``view`` and ``annotated.png``; see ``web.view``):
 ``types=galaxy,nebula,star`` (marker types to show; empty = none), ``brightest=N`` (name only
-the N brightest) and ``label=NAME`` (repeatable: name these particular objects too). The
+the N brightest), ``label=NAME`` (repeatable: name these particular objects too) and
+``undetected=1`` (also name what the image doesn't show, at its estimated position). The
 preview and the PNG for the same options are made from the same marker list.
 
 Everything else is served from the static site directory. Standard library only.
@@ -54,7 +55,7 @@ from astroidentify.web.view import TYPE_KEYS, ViewOptions, ViewOptionsError, mak
 logger = logging.getLogger(__name__)
 
 _JOB_PATH = re.compile(r"^/api/jobs/([0-9a-f]{32})(?:/(original\.png|annotated\.png|view))?$")
-_VIEW_PARAMS = ("types", "brightest", "label")
+_VIEW_PARAMS = ("types", "brightest", "label", "undetected")
 
 
 class AppServer(ThreadingHTTPServer):

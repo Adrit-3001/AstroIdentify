@@ -16,10 +16,16 @@ stars, all unmatched detections and all identified objects. A *view* picks from 
   ID) of particular objects to name in addition, even when their type is hidden. Matched
   exactly, ignoring case and spacing (``inspection.selection.find_record``).
 
-What may be named never changes with the options: an object only when the evidence step found
-image support for it (strong, moderate or weak), a star only when a detection was matched to it
-in Gaia DR3. A request for anything else is answered with the reason it isn't named. The
-options only choose among the pipeline's own results; nothing is re-measured or re-matched.
+* ``undetected`` - also name catalogued objects the image doesn't show or can't confirm, at an
+  *estimated position*: the catalogue position projected through the plate solution (fitted to
+  the matched Gaia stars), drawn dashed with its 95% accuracy circle, and labelled with why it
+  is an estimate (not visible, unconfirmed, not assessed, not detected). Off by default.
+
+Otherwise what may be named never changes with the options: an object only when the evidence
+step found image support for it (strong, moderate or weak), a star only when a detection was
+matched to it in Gaia DR3. A request for anything else is answered with the reason it isn't
+named. The options only choose among the pipeline's own results; nothing is re-measured or
+re-matched, and an estimated position is never treated as a detection.
 
 Without options the view is the default one: every type, up to ``MAX_OBJECT_LABELS`` objects
 (best supported first) and ``MAX_STAR_LABELS`` named stars (brightest first).
@@ -89,11 +95,24 @@ NAMED_STAR_COLOR = (235, 240, 255)
 
 # Outcomes of a request to name a particular object.
 REQUEST_LABELLED = "labelled"
+REQUEST_ESTIMATED = "estimated"  # not seen in the image; named at its estimated position
 REQUEST_NOT_DETECTED = "not_detected"  # in the image per the catalogue, but not detected
 REQUEST_NOT_ANNOTATED = "not_annotated"  # in the field, but a kind AstroIdentify doesn't mark
 REQUEST_OUTSIDE = "outside"
 REQUEST_AMBIGUOUS = "ambiguous"
 REQUEST_NOT_FOUND = "not_found"
+
+
+#: Why a position is only an estimate: (text for messages, short text for labels).
+NOT_SEEN_TEXT = {
+    "not_visible": ("the image shows no sign of it", "not visible"),
+    "unconfirmed": ("the image can't confirm it", "unconfirmed"),
+    "not_assessed": ("it wasn't checked against the image", "not assessed"),
+    "not_detected": (
+        "no detected point of light was matched to it (too faint, saturated or blended)",
+        "not detected",
+    ),
+}
 
 
 class ViewOptionsError(ValueError):
@@ -111,6 +130,7 @@ class ViewOptions:
     types: frozenset[str] | None = None
     brightest: int | None = None
     labels: tuple[str, ...] = ()
+    undetected: bool = False
 
     @classmethod
     def from_values(
@@ -118,6 +138,7 @@ class ViewOptions:
         types: Iterable[str] | None = None,
         brightest: int | str | None = None,
         labels: Iterable[str] = (),
+        undetected: bool | str = False,
     ) -> ViewOptions:
         """Validated options from user input. ``types`` items may be comma-separated.
 
@@ -158,18 +179,29 @@ class ViewOptions:
                 names.append(text)
         if len(names) > MAX_REQUESTS:
             raise ViewOptionsError(f"at most {MAX_REQUESTS} objects can be named at once")
-        return cls(chosen, count, tuple(names))
+        if isinstance(undetected, str):
+            if undetected.strip().lower() not in ("", "0", "1", "true", "false"):
+                raise ViewOptionsError(f"undetected must be 1 or 0, got {undetected!r}")
+            undetected = undetected.strip().lower() in ("1", "true")
+        return cls(chosen, count, tuple(names), bool(undetected))
 
     @classmethod
     def from_query(cls, params: Mapping[str, list[str]]) -> ViewOptions:
         """Options from URL query parameters ``types`` (comma list; present but empty means
-        none), ``brightest`` and ``label`` (repeated). Other parameters are ignored."""
+        none), ``brightest``, ``label`` (repeated) and ``undetected`` (1 or 0). Other parameters
+        are ignored."""
         brightest = (params.get("brightest") or [None])[-1]
-        return cls.from_values(params.get("types"), brightest, params.get("label") or ())
+        undetected = (params.get("undetected") or [""])[-1]
+        return cls.from_values(
+            params.get("types"), brightest, params.get("label") or (), undetected
+        )
 
     @property
     def is_default(self) -> bool:
-        return self.types is None and self.brightest is None and not self.labels
+        return (
+            self.types is None and self.brightest is None and not self.labels
+            and not self.undetected
+        )  # fmt: skip
 
     def shows(self, key: str) -> bool:
         return self.types is None or key in self.types
@@ -179,6 +211,7 @@ class ViewOptions:
             "types": sorted(self.types, key=TYPE_KEYS.index) if self.types is not None else None,
             "brightest": self.brightest,
             "labels": list(self.labels),
+            "undetected": self.undetected,
         }
 
 
@@ -190,7 +223,7 @@ def make_view(analysis: dict[str, Any], options: ViewOptions | None = None) -> d
     pool = analysis["pool"]
     stars, detections, objects = pool["stars"], pool["detections"], pool["objects"]
 
-    requests, wanted = _resolve_requests(analysis, options.labels)
+    requests, wanted, estimates = _resolve_requests(analysis, options)
 
     shown_objects = [o for o in objects if options.shows(o["category"]) or o["id"] in wanted]
     shown_stars = []
@@ -202,7 +235,11 @@ def make_view(analysis: dict[str, Any], options: ViewOptions | None = None) -> d
 
     # What gets a name: the requests, plus either the default caps or the N brightest.
     labelled: set = set(wanted)
-    eligible_objects = [o for o in shown_objects if o["eligible"] and options.shows(o["category"])]
+    # Objects that may be named: those the image shows, and (when asked) the others too.
+    eligible_objects = [
+        o for o in shown_objects
+        if (o["eligible"] or options.undetected) and options.shows(o["category"])
+    ]  # fmt: skip
     named_stars = [s for s in shown_stars if s.get("name") and options.shows(CATEGORY_STAR)]
     if options.brightest is None:
         labelled |= {o["id"] for o in eligible_objects[:MAX_OBJECT_LABELS]}
@@ -233,7 +270,10 @@ def make_view(analysis: dict[str, Any], options: ViewOptions | None = None) -> d
         marker = {k: o[k] for k in _OBJECT_FIELDS}
         if o["id"] in labelled and o["eligible"]:
             marker["label"] = True
+        elif o["id"] in labelled and options.undetected:
+            marker.update(_estimate_fields(o, o.get("not_seen") or "not_assessed"))
         markers.append(marker)
+    markers += estimates
 
     object_markers = [m for m in markers if m["kind"] == "object"]
     totals = analysis["totals"]
@@ -247,6 +287,7 @@ def make_view(analysis: dict[str, Any], options: ViewOptions | None = None) -> d
         "objects": len(object_markers),
         "objects_total": totals["objects"],
         "objects_labelled": sum(1 for m in object_markers if m.get("label")),
+        "objects_estimated": sum(1 for m in object_markers if m.get("estimated")),
     }
     return {
         "schema_version": 1,
@@ -336,6 +377,40 @@ def star_identifier(star: dict[str, Any]) -> str:
     return main_id or f"Gaia DR3 {star['gaia_id']}"
 
 
+def _estimate_fields(source: dict[str, Any], why: str) -> dict[str, Any]:
+    """Marker fields for a position shown only as an estimate (see the module docstring)."""
+    accuracy = source.get("accuracy")
+    return {
+        "label": True,
+        "estimated": True,
+        "not_seen": why,
+        "estimate_note": f"{NOT_SEEN_TEXT[why][1]} · estimated position",
+        "accuracy": accuracy,
+        "accuracy_text": accuracy_text(accuracy, source.get("footprint") is not None),
+    }
+
+
+def accuracy_text(accuracy: dict[str, Any] | None, extended: bool = False) -> str:
+    """How far off an estimated position may be, in plain words."""
+    if not accuracy:
+        text = "How accurate this position is couldn't be measured (no Gaia-matched stars)."
+    else:
+        size = (
+            f"{accuracy['r95_arcsec']:.1f}″ ({accuracy['r95_px']:.1f} px)"
+            if accuracy.get("r95_arcsec") is not None
+            else f"{accuracy['r95_px']:.1f} px"
+        )
+        where = "near it" if accuracy.get("source") == "local" else "across the image"
+        stars = f"{accuracy['n_stars']} " if accuracy.get("n_stars") else ""
+        text = (
+            f"Placed by the plate solution, which fits {stars}matched Gaia stars {where} to "
+            f"within about {size} (95%); the catalogue's own position error is not included."
+        )
+    if extended:
+        text += " For an extended object this is its catalogued centre and size."
+    return text
+
+
 def _star_key(star: dict[str, Any]) -> str:
     return f"gaia:{star['gaia_id']}"
 
@@ -389,14 +464,16 @@ def _search_records(analysis: dict[str, Any]) -> list[dict[str, Any]]:
     return records
 
 
-def _resolve_requests(analysis: dict[str, Any], labels: tuple[str, ...]):
-    """``(answers, keys)``: one answer per requested name, and the marker keys to show and
-    name (``catalogue_id`` for objects, ``"gaia:<id>"`` for stars)."""
-    if not labels:
-        return [], set()
+def _resolve_requests(analysis: dict[str, Any], options: ViewOptions):
+    """``(answers, keys, estimates)``: one answer per requested name, the marker keys to show
+    and name (``catalogue_id`` for objects, ``"gaia:<id>"`` for stars), and markers at the
+    estimated positions of requested catalogue rows that aren't otherwise drawn."""
+    if not options.labels:
+        return [], set(), []
     records = _search_records(analysis)
-    answers, keys = [], set()
-    for query in labels:
+    answers, keys, estimates = [], set(), []
+    placed: set = set()
+    for query in options.labels:
         answer = {"query": query, "status": REQUEST_NOT_FOUND, "name": None, "message": ""}
         try:
             found = find_record(records, query, "objects and stars in this image")
@@ -411,19 +488,66 @@ def _resolve_requests(analysis: dict[str, Any], labels: tuple[str, ...]):
             keys.add(record["_key"])  # shown either way, so it can be found on the image
             if marker["kind"] == "star" or marker["eligible"]:
                 answer.update(status=REQUEST_LABELLED, message="Named on the image.")
+            elif options.undetected:
+                why = marker.get("not_seen") or "not_assessed"
+                answer.update(
+                    status=REQUEST_ESTIMATED,
+                    message=f"Named at its estimated position: {NOT_SEEN_TEXT[why][0]}. "
+                    + accuracy_text(marker.get("accuracy"), marker.get("footprint") is not None),
+                )
             else:
                 level = SUPPORT_TEXT.get(marker.get("support") or "", "").lower()
                 why = f" ({level})" if level else " (the evidence step didn't grade it)"
                 answer.update(
                     status=REQUEST_NOT_DETECTED,
                     message="The catalogue places it here and it is marked, but the image shows "
-                    f"no clear sign of it{why}, so it isn't named.",
+                    f"no clear sign of it{why}, so it isn't named. Turn on “objects the image "
+                    "doesn't show” to name it at its estimated position.",
                 )
             answers.append(answer)
             continue
-        answer.update(_explain_missing(analysis, query))
+        explained = _explain_missing(analysis, query)
+        estimate = explained.pop("estimate", None)
+        if estimate is not None and options.undetected:
+            why = estimate["not_seen"]
+            explained.update(
+                status=REQUEST_ESTIMATED,
+                message=f"Named at its estimated position: {NOT_SEEN_TEXT[why][0]}. "
+                + accuracy_text(analysis.get("field_accuracy")),
+            )
+            if estimate["id"] not in placed:
+                placed.add(estimate["id"])
+                estimates.append(_estimate_marker(analysis, estimate))
+        elif estimate is not None:
+            explained["message"] += (
+                " Turn on “objects the image doesn't show” to name it at its estimated position."
+            )
+        answer.update(explained)
         answers.append(answer)
-    return answers, keys
+    return answers, keys, estimates
+
+
+def _estimate_marker(analysis: dict[str, Any], e: dict[str, Any]) -> dict[str, Any]:
+    """An object marker at the estimated position of a catalogue row or Gaia star."""
+    category = e.get("category") or "unknown"
+    marker = {
+        "kind": "object",
+        "id": e["id"],
+        "x": e["x"],
+        "y": e["y"],
+        "centre_in_image": True,
+        "name": e["name"],
+        "common_name": e.get("common_name"),
+        "type": e.get("type") or "",
+        "category": category,
+        "color": hex_color(CATEGORY_COLORS.get(category, DEFAULT_COLOR)),
+        "footprint": None,
+        "support": None,
+        "explanation": None,
+        "magnitude": e.get("magnitude"),
+    }
+    marker.update(_estimate_fields({"accuracy": analysis.get("field_accuracy")}, e["not_seen"]))
+    return marker
 
 
 def _ambiguity_text(query: str, error: str) -> str:
@@ -448,6 +572,20 @@ def _explain_missing(analysis: dict[str, Any], query: str) -> dict[str, Any]:
                 "name": name,
                 "message": "It is near this field but outside the image.",
             }
+        estimate = None
+        if row.get("in_image"):
+            estimate = {
+                "id": f"row:{row['catalogue_id']}",
+                "x": row["x"],
+                "y": row["y"],
+                "name": _estimate_name(row, found.matched_text),
+                "common_name": None,
+                "type": row.get("type"),
+                "category": row.get("category"),
+                "magnitude": row.get("magnitude"),
+                "not_seen": "not_detected" if row.get("category") == CATEGORY_STAR
+                else "not_assessed",
+            }  # fmt: skip
         if row.get("category") == CATEGORY_STAR:
             return {
                 "status": REQUEST_NOT_DETECTED,
@@ -455,6 +593,7 @@ def _explain_missing(analysis: dict[str, Any], query: str) -> dict[str, Any]:
                 "message": "It is in the image area, but no detected point of light was matched "
                 "to it in Gaia DR3 (very bright stars can be saturated or split up), so it "
                 "isn't named.",
+                "estimate": estimate,
             }
         if row.get("status") == "in_field_type_excluded":
             kind = row.get("type") or "this kind of object"
@@ -463,6 +602,7 @@ def _explain_missing(analysis: dict[str, Any], query: str) -> dict[str, Any]:
                 "name": name,
                 "message": f"It is catalogued in this field, but as a {kind}, a kind of object "
                 "AstroIdentify doesn't mark.",
+                "estimate": estimate,
             }
         return {
             "status": REQUEST_OUTSIDE,
@@ -470,12 +610,27 @@ def _explain_missing(analysis: dict[str, Any], query: str) -> dict[str, Any]:
             "message": "No part of it falls inside the image.",
         }
     gaia_id = _gaia_id(query)
-    if gaia_id is not None and gaia_id in set(analysis.get("gaia_in_image") or ()):
+    gaia = analysis.get("gaia_in_image") or {}
+    if gaia_id is not None and gaia_id in gaia:
+        x, y, g = gaia[gaia_id] if isinstance(gaia, dict) else (None, None, None)
+        estimate = None
+        if x is not None and y is not None:
+            estimate = {
+                "id": f"gaia:{gaia_id}",
+                "x": x,
+                "y": y,
+                "name": f"Gaia DR3 {gaia_id}",
+                "type": "Star",
+                "category": CATEGORY_STAR,
+                "magnitude": {"band": "G", "value": g} if g is not None else None,
+                "not_seen": "not_detected",
+            }
         return {
             "status": REQUEST_NOT_DETECTED,
             "name": f"Gaia DR3 {gaia_id}",
             "message": "This Gaia star is in the image area and bright enough to be detected, "
             "but no detected point of light was matched to it, so it isn't named.",
+            "estimate": estimate,
         }
     return {
         "status": REQUEST_NOT_FOUND,
@@ -483,6 +638,18 @@ def _explain_missing(analysis: dict[str, Any], query: str) -> dict[str, Any]:
         "and catalogue IDs (for example M 57, NGC 6720, HD 183987 or a Gaia DR3 source ID) are "
         "matched exactly, ignoring case and spaces.",
     }
+
+
+def _estimate_name(row: dict[str, Any], matched: str) -> str:
+    """Label for a placed catalogue row: the common name it was asked for by, else its
+    designation without SIMBAD's ``* ``/``V* `` prefix (``* bet01 Cyg`` -> ``bet01 Cyg``)."""
+    if any(matched.casefold() == n.casefold() for n in row.get("common_names") or ()):
+        return matched
+    name = " ".join(str(row["display_name"]).split())
+    for prefix in ("* ", "V* "):
+        if name.startswith(prefix):
+            return name[len(prefix) :]
+    return name
 
 
 def _gaia_id(query: str) -> str | None:
@@ -508,6 +675,17 @@ def _legend(counts: dict[str, int], objects: list[dict[str, Any]]) -> list[dict[
                 "its size is catalogued, a crosshair when it isn't. Named on the image only when "
                 "the image shows evidence of it; all are listed beside the image.",
                 "colors": sorted({o["color"] for o in objects}),
+            }
+        )
+    if counts["objects_estimated"]:
+        legend.append(
+            {
+                "kind": "estimate",
+                "label": "Estimated position",
+                "detail": "Something the image doesn't show or can't confirm, drawn dashed "
+                "where the plate solution (fitted to the matched stars) places its catalogue "
+                "position. The dashed circle is where it should be with 95% confidence, or a "
+                "minimum size when that is smaller.",
             }
         )
     if counts["stars_marked"]:
@@ -539,5 +717,8 @@ def _object_summary(o: dict[str, Any]) -> dict[str, Any]:
         "explanation": o["explanation"],
         "magnitude": o.get("magnitude"),
         "labelled": bool(o.get("label")),
+        "estimated": bool(o.get("estimated")),
+        "not_seen": o.get("not_seen"),
+        "accuracy_text": o.get("accuracy_text"),
         "centre_in_image": o["centre_in_image"],
     }

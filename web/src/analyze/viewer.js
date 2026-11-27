@@ -7,7 +7,7 @@
  * screens. Labels are HTML in screen pixels, placed with the same rule as the PNG and
  * re-placed whenever the frame is resized.
  */
-import { labelText, markerBox, placeLabel } from './labels.js';
+import { estimateRadius, labelText, markerBox, placeLabel } from './labels.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 // Smallest on-screen marker sizes (CSS px) so markers stay visible when the image is small.
@@ -86,14 +86,22 @@ export function createViewer({ frame, image, markersSvg, labelsLayer }) {
         );
         if (marker.name) svg('title', {}, item.el).textContent = marker.name;
       } else {
-        const g = svg('g', { class: 'm-object', 'data-id': marker.id }, layers.object);
+        const g = svg(
+          'g',
+          { class: marker.estimated ? 'm-object m-object--estimated' : 'm-object', 'data-id': marker.id },
+          layers.object,
+        );
         g.style.setProperty('--c', marker.color);
         svg('title', {}, g).textContent = `${marker.name}${marker.type ? ` — ${marker.type}` : ''}`;
         if (marker.footprint) {
           const pts = marker.footprint.map(([x, y]) => `${x + 0.5},${y + 0.5}`).join(' ');
           svg('polygon', { points: pts, class: 'm-object__outline' }, g);
         }
-        if (marker.centre_in_image) {
+        if (marker.estimated && marker.centre_in_image) {
+          // Not seen in the image: a dashed accuracy circle and a dot, never a crosshair.
+          item.parts.circle = svg('circle', { class: 'm-object__estimate', cx: marker.x + 0.5, cy: marker.y + 0.5 }, g);
+          item.parts.dot = svg('circle', { class: 'm-object__dot', cx: marker.x + 0.5, cy: marker.y + 0.5 }, g);
+        } else if (marker.centre_in_image) {
           item.parts.arms = [0, 1, 2, 3].map(() => svg('line', { class: 'm-object__arm' }, g));
         }
         item.el = g;
@@ -146,7 +154,10 @@ export function createViewer({ frame, image, markersSvg, labelsLayer }) {
     for (const { marker, el, parts } of items) {
       if (marker.kind === 'detection') el.setAttribute('r', sz.detectionRadius);
       else if (marker.kind === 'star') el.setAttribute('r', sz.starRadius);
-      else if (parts.arms) {
+      else if (parts.circle) {
+        parts.circle.setAttribute('r', estimateRadius(marker, sz.objectOuter));
+        parts.dot.setAttribute('r', Math.max(1.5, 2 / scale));
+      } else if (parts.arms) {
         // Crosshair; with an outline, just a small centre tick (as in the PNG).
         const [inner, outer] = marker.footprint ? [0, sz.objectInner] : [sz.objectInner, sz.objectOuter];
         const cx = marker.x + 0.5;

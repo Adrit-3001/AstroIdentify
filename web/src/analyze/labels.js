@@ -9,9 +9,15 @@
 export function labelText(marker) {
   if (marker.kind === 'object') {
     const name = marker.common_name ? `${marker.name} (${marker.common_name})` : marker.name;
-    return [name, marker.type || null];
+    const second = [marker.type, marker.estimate_note].filter(Boolean).join(' · ');
+    return [name, second || null];
   }
   return [marker.name || '', null];
+}
+
+/** Radius of an estimated position's dashed circle: its 95% accuracy, at least `minimum`. */
+export function estimateRadius(marker, minimum) {
+  return Math.max(marker.accuracy?.r95_px || 0, minimum);
 }
 
 /**
@@ -29,7 +35,7 @@ export function markerBox(marker, sizes, width, height) {
       const ys = pts.map((p) => p[1]);
       return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
     }
-    const r = sizes.objectOuter;
+    const r = marker.estimated ? estimateRadius(marker, sizes.objectOuter) : sizes.objectOuter;
     return [marker.x - r, marker.y - r, marker.x + r, marker.y + r];
   }
   const r = sizes.starRadius;

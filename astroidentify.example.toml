@@ -57,3 +57,4 @@ object = "NGC 7000"           # or a list: ["NGC 7000", "Albireo"]
 # types = ["galaxy", "nebula", "planetary_nebula", "star_cluster", "star"]
 # brightest = 10              # name only the 10 brightest
 # label = ["M 57", "Albireo"] # also name these, if they were detected
+# include_undetected = true   # ...or at their estimated position if they weren't (dashed)

@@ -529,6 +529,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="also name this object or star (repeatable): name, catalogue ID, alias or Gaia "
         "DR3 source ID, matched exactly ignoring case and spaces",
     )
+    annotate.add_argument(
+        "--include-undetected",
+        action="store_true",
+        help="also name catalogued objects the image doesn't show or can't confirm (and "
+        "requested stars that weren't detected), drawn dashed at their estimated position with "
+        "a 95%% accuracy circle",
+    )
     _add_verbose(annotate)
 
     run_parser = commands.add_parser(
@@ -1011,7 +1018,9 @@ def _run_annotate(args: argparse.Namespace) -> int:
     from astroidentify.web.view import ViewOptions, ViewOptionsError
 
     try:
-        options = ViewOptions.from_values(args.types, args.brightest, args.label)
+        options = ViewOptions.from_values(
+            args.types, args.brightest, args.label, args.include_undetected
+        )
     except ViewOptionsError as exc:
         _error(exc)
         return EXIT_USAGE
@@ -1053,9 +1062,12 @@ def format_annotate_summary(view, outcomes, paths) -> str:
         f"{_count(c['detections_marked'], 'other point')} of light (types: {types})",
         "Naming: "
         + (f"the {chosen['brightest']} brightest" if chosen["brightest"] else "default limits")
-        + (f", plus {len(chosen['labels'])} requested" if chosen["labels"] else ""),
+        + (f", plus {len(chosen['labels'])} requested" if chosen["labels"] else "")
+        + ("; undetected objects at estimated positions" if chosen["undetected"] else ""),
         f"Named ({len(named)}): " + (", ".join(named) if named else "none"),
     ]
+    if c.get("objects_estimated"):
+        lines.append(f"Estimated positions (not seen in the image): {c['objects_estimated']}")
     if "assess" not in outcomes or not outcomes["assess"].ok:
         lines.append(
             "Evidence: not available (pass --evidence), so no catalogued object can be named"
@@ -1063,6 +1075,8 @@ def format_annotate_summary(view, outcomes, paths) -> str:
     for answer in view["view"]["requests"]:
         target = f" ({answer['name']})" if answer.get("name") else ""
         verdict = "named" if answer["status"] == "labelled" else answer["message"]
+        if answer["status"] == "estimated":
+            verdict = "named (estimated) - " + answer["message"]
         lines.append(f"  {answer['query']}{target}: {verdict}")
     lines += [f"Annotated image: {paths.image}", f"Summary: {paths.summary}"]
     return "\n".join(lines)

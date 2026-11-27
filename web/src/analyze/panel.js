@@ -24,6 +24,8 @@ const SWATCH = {
     `<svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true"><g stroke="${color}" stroke-width="2" stroke-linecap="round"><path d="M10 2v5M10 13v5M2 10h5M13 10h5"/></g></svg>`,
   star: () =>
     '<svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true"><circle cx="10" cy="10" r="6" fill="none" stroke="#96cdff" stroke-width="1.6"/></svg>',
+  estimate: () =>
+    '<svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true"><circle cx="10" cy="10" r="7" fill="none" stroke="#e6e6e6" stroke-width="1.6" stroke-dasharray="3 3"/><circle cx="10" cy="10" r="1.6" fill="#e6e6e6"/></svg>',
   detection: () =>
     '<svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true"><circle cx="10" cy="10" r="4.5" fill="none" stroke="#96a2be" stroke-width="1.4" opacity="0.8"/></svg>',
 };
@@ -167,6 +169,7 @@ export function renderPanel(panel, result, job, onHighlight) {
               ? h('p', { class: `objects__support objects__support--${o.support}` }, o.support_text)
               : null,
             !o.centre_in_image ? h('p', { class: 'objects__note' }, 'Centred outside the frame; it extends into it.') : null,
+            o.estimated ? h('p', { class: 'objects__note objects__note--estimate' }, `Estimated position (dashed). ${o.accuracy_text || ''}`) : null,
           ),
         );
         if (o.explanation) li.title = o.explanation;

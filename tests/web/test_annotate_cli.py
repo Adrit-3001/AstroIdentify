@@ -39,8 +39,9 @@ def test_annotate_writes_the_image_and_answers_each_request(tmp_path, capsys):
     assert "Named (2): M 57, NGC 2" in out or "Named (2): NGC 2, M 57" in out
     assert "Vega (* alf Lyr): It is in the image area" in out
     summary = json.loads((tmp_path / "annotated" / "annotation.json").read_text())
-    assert summary["view"]["options"] == {"types": ["galaxy"], "brightest": 1,
-                                          "labels": ["M57", "Vega"]}  # fmt: skip
+    assert summary["view"]["options"] == {
+        "types": ["galaxy"], "brightest": 1, "labels": ["M57", "Vega"], "undetected": False,
+    }  # fmt: skip
     assert (tmp_path / "annotated" / "annotated.png").is_file()
     assert _digest(tmp_path / "steps") == before  # upstream products untouched
 
@@ -82,3 +83,11 @@ def test_annotate_usage_and_input_errors(tmp_path, capsys):
     args[args.index("--objects") + 1] = str(tmp_path)
     assert main(args) == EXIT_ERROR
     assert "not an 'identify' output directory" in capsys.readouterr().err
+
+
+def test_annotate_can_include_undetected_objects(tmp_path, capsys):
+    dirs = outputs(tmp_path)
+    assert main(_args(tmp_path, dirs, "--include-undetected", "--label", "Vega")) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "Vega (* alf Lyr): named (estimated)" in out
+    assert "Estimated positions (not seen in the image): 2" in out  # Vega and LEDA 1

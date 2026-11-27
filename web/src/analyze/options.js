@@ -7,7 +7,7 @@
  * Options: { types: string[] | null (null = every type), brightest: number | null, labels: string[] }
  */
 
-export const DEFAULT_OPTIONS = Object.freeze({ types: null, brightest: null, labels: [] });
+export const DEFAULT_OPTIONS = Object.freeze({ types: null, brightest: null, labels: [], undetected: false });
 const DEFAULT_BRIGHTEST = 5;
 const MAX_BRIGHTEST = 100;
 const MAX_LABELS = 20;
@@ -32,6 +32,7 @@ export function optionsToParams(options, params = new URLSearchParams()) {
   if (options.types) params.set('types', options.types.join(','));
   if (options.brightest) params.set('brightest', String(options.brightest));
   for (const name of options.labels || []) params.append('label', name);
+  if (options.undetected) params.set('undetected', '1');
   return params;
 }
 
@@ -40,11 +41,12 @@ export function optionsFromParams(params) {
   const n = Number.parseInt(params.get('brightest') || '', 10);
   const brightest = Number.isFinite(n) && n >= 1 ? Math.min(n, MAX_BRIGHTEST) : null;
   const labels = params.getAll('label').filter((s) => s.trim()).slice(0, MAX_LABELS);
-  return { types, brightest, labels };
+  const undetected = params.get('undetected') === '1';
+  return { types, brightest, labels, undetected };
 }
 
 export function isDefault(options) {
-  return options.types === null && !options.brightest && !options.labels.length;
+  return options.types === null && !options.brightest && !options.labels.length && !options.undetected;
 }
 
 /** The server's answer for a requested name (its colour shows the outcome). */
@@ -75,6 +77,7 @@ export function createOptions(container, onChange) {
     inputmode: 'numeric',
     'aria-label': 'How many to name',
   });
+  const undetectedToggle = h('input', { type: 'checkbox', id: 'opt-undetected' });
   const requestInput = h('input', {
     type: 'text',
     id: 'opt-request',
@@ -98,7 +101,8 @@ export function createOptions(container, onChange) {
       'p',
       { class: 'panel__hint' },
       'A name, catalogue ID or Gaia DR3 source ID, matched exactly (case and spaces ignored). ' +
-        'It is named only if it was detected in this image.',
+        'It is named if it was detected in this image, or at its estimated position when ' +
+        'objects the image doesn’t show are included.',
     ),
     requestError,
     requestList,
@@ -121,7 +125,20 @@ export function createOptions(container, onChange) {
       { class: 'panel__hint' },
       'Brightest by catalogued magnitude (Gaia G for stars; V or B for other objects, which ' +
         'come last when they have none). Stars without a name get their catalogue ID. Only ' +
-        'what the image shows is ever named.',
+        'what the image shows is named, unless you include the rest below.',
+    ),
+    h(
+      'label',
+      { for: 'opt-undetected', class: 'check check--top' },
+      undetectedToggle,
+      h('span', {}, 'Also name objects the image doesn’t show (estimated position)'),
+    ),
+    h(
+      'p',
+      { class: 'panel__hint' },
+      'Objects that aren’t visible or can’t be confirmed are drawn dashed where the plate ' +
+        'solution, fitted to the matched stars, places them. The dashed circle shows how ' +
+        'accurate that position is.',
     ),
     form,
     resetButton,
@@ -208,10 +225,16 @@ export function createOptions(container, onChange) {
   function render() {
     renderTypes();
     renderBrightest();
+    undetectedToggle.checked = Boolean(options.undetected);
     renderRequests();
     resetButton.hidden = isDefault(options);
   }
 
+  undetectedToggle.addEventListener('change', () => {
+    options = { ...options, undetected: undetectedToggle.checked };
+    render();
+    emit();
+  });
   brightestToggle.addEventListener('change', () => {
     const n = Number.parseInt(brightestInput.value, 10);
     options = {
